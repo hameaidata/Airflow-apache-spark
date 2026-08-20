@@ -1,0 +1,23 @@
+# Por defecto, normalizar finales de linea
+* text=auto eol=lf
+
+# Estos SIEMPRE con LF: se ejecutan dentro de contenedores Linux.
+# Con CRLF fallan con "bad interpreter: /bin/bash^M"
+*.sh            text eol=lf
+*.py            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.conf          text eol=lf
+Dockerfile      text eol=lf
+Makefile        text eol=lf
+.env*           text eol=lf
+
+# Estos si pueden llevar CRLF: solo corren en Windows
+*.ps1           text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# Binarios
+*.jar           binary
+*.parquet       binary
+*.png           binary

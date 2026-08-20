@@ -1,0 +1,32 @@
+# SECRETOS - nunca subir
+.env
+.env.local
+*.key
+*.pem
+*.jks
+*.keytab
+
+# Los .env.windows / .env.ubuntu que se entregan traen secretos generados.
+# Si vas a versionarlos, reemplaza los valores por placeholders primero.
+
+# Airflow
+airflow/logs/
+airflow/config/airflow.cfg
+airflow/**/__pycache__/
+*.pyc
+
+# Spark
+spark/events/
+spark-warehouse/
+
+# Datos
+data/
+*.csv
+*.parquet
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
