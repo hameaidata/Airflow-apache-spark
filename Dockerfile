@@ -31,10 +31,39 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-17-jre-headless \
         procps \
         curl \
+        gnupg2 \
         gcc g++ \
-        unixodbc-dev \
+        unixodbc unixodbc-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# ----------------------------------------------------------------------------
+# ODBC Driver 18 de Microsoft + cliente Kerberos
+# ----------------------------------------------------------------------------
+# NECESARIO si tu SQL Server usa autenticacion integrada de Windows/AD.
+# pymssql (que es lo que trae el provider mssql) NO soporta auth integrada:
+# solo usuario y contrasena de SQL. Con AD hay que ir por ODBC + Kerberos.
+#
+# AVISO: este paso descarga de packages.microsoft.com. En muchas redes
+# corporativas ese host esta bloqueado y el build falla aqui. Si te pasa,
+# descarga los .deb desde una maquina con salida y copialos con COPY.
+#
+# La imagen base es Debian 12 (bookworm). Si cambias de imagen base, ajusta
+# la ruta de la lista de paquetes.
+ARG INSTALAR_ODBC=true
+RUN if [ "$INSTALAR_ODBC" = "true" ]; then \
+      set -e; \
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
+      echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/mssql-release.list && \
+      apt-get update && \
+      ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends krb5-user && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    else \
+      echo "ODBC omitido (INSTALAR_ODBC=false)"; \
+    fi
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
@@ -93,8 +122,10 @@ RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
         "apache-airflow-providers-apache-spark==6.3.1" \
         "apache-airflow-providers-common-sql" \
         "apache-airflow-providers-postgres" \
+        "apache-airflow-providers-odbc" \
     && pip install --no-cache-dir \
         "pyspark==3.5.3" \
+        "pyodbc" \
         "pandas" \
         "pyarrow"
 
@@ -109,5 +140,7 @@ ENV JDBC_DRIVER_PATH=/opt/airflow/jars
 
 # Comprobacion de que lo esencial quedo instalado
 RUN python -c "import pymssql; print('pymssql', pymssql.__version__)" \
+ && python -c "import pyodbc; print('pyodbc', pyodbc.version)" \
+ && (odbcinst -q -d || echo "AVISO: sin drivers ODBC registrados") \
  && java -version \
  && spark-submit --version 2>&1 | head -3

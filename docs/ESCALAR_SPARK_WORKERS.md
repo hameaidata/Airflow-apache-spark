@@ -211,23 +211,26 @@ Aquí sí ganas capacidad. En la máquina nueva, con Docker instalado:
 docker run -d \
   --name spark-worker-remoto-1 \
   --restart unless-stopped \
-  -e SPARK_MODE=worker \
-  -e SPARK_MASTER_URL=spark://IP_DEL_MASTER:7077 \
-  -e SPARK_WORKER_MEMORY=4G \
-  -e SPARK_WORKER_CORES=4 \
-  -e SPARK_RPC_AUTHENTICATION_ENABLED=yes \
-  -e SPARK_RPC_AUTHENTICATION_SECRET=<el SPARK_RPC_SECRET de tu .env> \
-  -e SPARK_RPC_ENCRYPTION_ENABLED=yes \
   --network host \
-  bitnami/spark:3.5.3
+  --entrypoint /opt/spark/bin/spark-class \
+  apache/spark:3.5.3 \
+    org.apache.spark.deploy.worker.Worker \
+    spark://IP_DEL_MASTER:7077 \
+    --cores 4 \
+    --memory 4G \
+    --webui-port 8081
 ```
+
+(Si tienes la autenticación activada, añade
+`-e SPARK_WORKER_OPTS="-Dspark.authenticate=true -Dspark.authenticate.secret=EL_SECRETO"`
+antes del nombre de la imagen, con el mismo secreto que el master.)
 
 Tres cosas que te van a morder si no las miras:
 
-- **El secreto RPC debe ser idéntico.** Cópialo tal cual del `.env` de la máquina
-  del master. Si no coincide, el worker intenta registrarse, falla la
-  autenticación y reintenta en bucle. En los logs del worker sale
-  `Authentication failed`.
+- **Si usas autenticación, el secreto debe ser idéntico** en master, worker y
+  cliente. Si no coincide, el worker intenta registrarse, falla y reintenta en
+  bucle; en sus logs sale `Authentication failed`. Por defecto la dejamos
+  desactivada — ver `DIAGNOSTICO_SPARK.md`.
 - **El firewall de Windows bloquea el 7077 por defecto.** Ábrelo en la máquina
   del master:
   ```powershell

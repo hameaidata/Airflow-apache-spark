@@ -134,6 +134,25 @@ AIRFLOW_IMAGE_TAG=2.11.2-python3.11
 POSTGRES_IMAGE_TAG=16-alpine
 REDIS_IMAGE_TAG=7-alpine
 SPARK_IMAGE_TAG=3.5.3
+# Imagen de Spark. Por defecto la OFICIAL de Apache.
+# Las imagenes de Bitnami usan variables propias (SPARK_MODE, SPARK_MASTER_URL...)
+# que la oficial no entiende: por eso el compose invoca las clases Java directamente.
+# Si necesitas UDFs de Python en los executors, usa un tag que incluya python3.
+# SPARK_IMAGE=apache/spark:3.5.3
+
+# --- Autenticacion del cluster de Spark -------------------------------------
+# DESACTIVADA por defecto para que el cluster arranque sin friccion.
+# Para activarla hay que ponerla en LOS TRES SITIOS o las tareas fallaran:
+#   1) SPARK_MASTER_OPTS y SPARK_WORKER_OPTS aqui abajo
+#   2) el conf del SparkSubmitOperator en el DAG:
+#        "spark.authenticate": "true"
+#        "spark.authenticate.secret": "<el mismo valor>"
+# Aviso: el secreto pasado por -D es visible con `ps` dentro del contenedor.
+# Lo correcto en produccion es un spark-defaults.conf con permisos 600.
+#   SPARK_MASTER_OPTS=-Dspark.authenticate=true -Dspark.authenticate.secret=EL_SECRETO
+#   SPARK_WORKER_OPTS=-Dspark.authenticate=true -Dspark.authenticate.secret=EL_SECRETO
+SPARK_MASTER_OPTS=
+SPARK_WORKER_OPTS=
 
 # --- Claves de cifrado ------------------------------------------------------
 # AIRFLOW_FERNET_KEY cifra Connections y Variables en la base de datos.

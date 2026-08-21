@@ -1,0 +1,137 @@
+# ============================================================================
+# IMAGEN AIRFLOW — VARIANTE SIN CONEXION A INTERNET
+# ----------------------------------------------------------------------------
+# Construye la misma imagen que el Dockerfile normal, pero tomando los
+# artefactos de la carpeta bundle/ en vez de descargarlos.
+#
+# ANTES DE USAR ESTO, LEE LA ALTERNATIVA:
+#
+#   En la mayoria de los casos NO hace falta reconstruir dentro del banco.
+#   El script scripts/preparar-bundle-offline.sh ya construye la imagen en la
+#   maquina con Internet y la exporta lista para cargar:
+#
+#       gunzip -c bundle/imagenes/airflow-bsg.tar.gz | docker load
+#
+#   Eso evita por completo este archivo y el problema de los paquetes del
+#   sistema operativo (ver abajo). Reconstruir internamente solo tiene sentido
+#   si la politica del banco exige que las imagenes se construyan dentro.
+#
+# Uso:
+#   ./scripts/preparar-bundle-offline.sh     # en la maquina CON Internet
+#   # trasladar bundle/ al banco
+#   docker build -f Dockerfile.offline -t airflow-bsg:2.11.2 .
+# ============================================================================
+
+FROM apache/airflow:2.11.2-python3.11
+
+USER root
+
+ARG SPARK_VERSION=3.5.3
+ARG HADOOP_VERSION=3
+
+# ----------------------------------------------------------------------------
+# PAQUETES DEL SISTEMA OPERATIVO — el punto dificil sin conexion
+# ----------------------------------------------------------------------------
+# La imagen base es Debian 12. Estos paquetes se instalan con apt, que necesita
+# un repositorio alcanzable. Sin Internet hay tres caminos:
+#
+#   1. RECOMENDADO — usar la imagen ya construida fuera (ver cabecera).
+#      Evita este problema entero.
+#
+#   2. Repositorio Debian replicado internamente. Si el banco ya tiene un
+#      espejo en Artifactory o Nexus, se apunta con APT_MIRROR:
+#
+#        docker build -f Dockerfile.offline \
+#          --build-arg APT_MIRROR=http://nexus.banco.com/repository/debian \
+#          -t airflow-bsg:2.11.2 .
+#
+#   3. Paquetes .deb pre-descargados y copiados. Mas fragil: hay que resolver
+#      las dependencias transitivas a mano.
+#
+ARG APT_MIRROR=""
+RUN if [ -n "${APT_MIRROR}" ]; then \
+        echo "deb ${APT_MIRROR} bookworm main" > /etc/apt/sources.list && \
+        echo "deb ${APT_MIRROR} bookworm-updates main" >> /etc/apt/sources.list && \
+        rm -f /etc/apt/sources.list.d/*.list ; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless \
+        procps \
+        unixodbc \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# ----------------------------------------------------------------------------
+# Spark — desde el paquete local, no descargado
+# ----------------------------------------------------------------------------
+COPY bundle/spark/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz /tmp/spark.tgz
+RUN tar -xzf /tmp/spark.tgz -C /opt \
+ && mv "/opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}" /opt/spark \
+ && rm /tmp/spark.tgz
+
+ENV SPARK_HOME=/opt/spark
+ENV PATH="${SPARK_HOME}/bin:${PATH}"
+
+# ----------------------------------------------------------------------------
+# Controladores JDBC — desde el paquete local
+# ----------------------------------------------------------------------------
+COPY bundle/jars/*.jar /opt/airflow/jars/
+RUN chown -R airflow:root /opt/airflow/jars && chmod 644 /opt/airflow/jars/*.jar
+
+# ----------------------------------------------------------------------------
+# Paquetes de Python — desde el wheelhouse local
+# ----------------------------------------------------------------------------
+COPY bundle/wheelhouse /tmp/wheelhouse
+COPY bundle/constraints-3.11.txt /tmp/constraints.txt
+
+USER airflow
+
+# --no-index desactiva por completo el acceso a PyPI. Si falta alguna rueda en
+# el wheelhouse, el build falla AQUI con un mensaje claro, en vez de intentar
+# salir a Internet y quedarse colgado hasta el tiempo de espera.
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheelhouse \
+        --constraint /tmp/constraints.txt \
+        "apache-airflow-providers-microsoft-mssql==4.7.0" \
+        "apache-airflow-providers-jdbc==5.5.0" \
+        "apache-airflow-providers-apache-spark==6.3.1" \
+        "apache-airflow-providers-common-sql" \
+        "apache-airflow-providers-postgres" \
+        "apache-airflow-providers-odbc" \
+ && pip install --no-cache-dir --no-index --find-links=/tmp/wheelhouse \
+        "pyspark==3.5.3" "pyodbc" "pandas" "pyarrow"
+
+# ibm-db es opcional: DB2 por JDBC no lo necesita.
+RUN pip install --no-cache-dir --no-index --find-links=/tmp/wheelhouse \
+        "ibm-db" "ibm-db-sa" \
+    || echo "AVISO: ibm-db no esta en el wheelhouse. DB2 funcionara por JDBC."
+
+USER root
+RUN rm -rf /tmp/wheelhouse /tmp/constraints.txt
+USER airflow
+
+ENV JDBC_DRIVER_PATH=/opt/airflow/jars
+
+# Comprobacion de que la imagen quedo completa
+RUN python -c "import pyodbc; print('pyodbc', pyodbc.version)" \
+ && java -version \
+ && spark-submit --version 2>&1 | head -3
+
+# ----------------------------------------------------------------------------
+# NOTA SOBRE EL DRIVER ODBC DE MICROSOFT
+# ----------------------------------------------------------------------------
+# El Dockerfile normal instala msodbcsql18 desde packages.microsoft.com. Aqui
+# se omite porque ese repositorio no es alcanzable sin Internet.
+#
+# Solo hace falta si SQL Server usa autenticacion integrada de Windows/AD.
+# Si es tu caso, hay dos salidas:
+#
+#   - Usar la imagen construida fuera (que si lo trae), o
+#   - Descargar los .deb de msodbcsql18 y sus dependencias desde una maquina
+#     con Internet, copiarlos a bundle/deb/ y anadir aqui:
+#         COPY bundle/deb/*.deb /tmp/deb/
+#         RUN ACCEPT_EULA=Y dpkg -i /tmp/deb/*.deb || apt-get -f install -y
+#
+# Con autenticacion de usuario y contrasena de SQL no se necesita: pymssql,
+# que viene con el provider, es suficiente.

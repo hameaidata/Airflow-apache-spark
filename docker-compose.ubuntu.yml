@@ -12,7 +12,9 @@
 # ============================================================================
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:${AIRFLOW_IMAGE_TAG:-2.10.5-python3.11}
+  # Por defecto la imagen oficial. Tras construir la propia (Dockerfile),
+  # pon AIRFLOW_IMAGE=airflow-bsg:2.11.2 en el .env.
+  image: ${AIRFLOW_IMAGE:-apache/airflow:${AIRFLOW_IMAGE_TAG:-2.11.2-python3.11}}
   # CRITICO EN LINUX: sin esto los logs se crean como root y el host no puede
   # leerlos ni borrarlos. El grupo 0 es requerido por la imagen oficial.
   user: "${AIRFLOW_UID:-50000}:0"
@@ -42,6 +44,14 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
 
+    # --- Provider JDBC ------------------------------------------------------
+    # Sin estos dos flags el hook IGNORA driver_path/driver_class del extra
+    # de la Connection y falla con "driver not found" sin explicar por que.
+    # Se deshabilitaron por defecto en el provider 4.0.0 (era un vector RCE).
+    AIRFLOW__PROVIDERS_JDBC__ALLOW_DRIVER_PATH_IN_EXTRA: "true"
+    AIRFLOW__PROVIDERS_JDBC__ALLOW_DRIVER_CLASS_IN_EXTRA: "true"
+    JDBC_DRIVER_PATH: /opt/airflow/jars
+
     # Providers extra. Vacio por defecto = arranque rapido.
     # Para produccion, construye una imagen propia (ver Dockerfile) en vez de esto.
     _PIP_ADDITIONAL_REQUIREMENTS: ${PIP_ADDITIONAL_REQUIREMENTS:-}
@@ -50,6 +60,10 @@ x-airflow-common: &airflow-common
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/config:/opt/airflow/config
+    # spark-submit corre DESDE el worker de Airflow: necesita ver el .py del job
+    - ./spark/jobs:/opt/spark-apps
+    # area compartida con el cluster de Spark (parquet, checkpoints)
+    - spark_data:/opt/spark-data
     # En Linux si podemos bind-montar los logs: quedan legibles desde el host.
     - ./airflow/logs:/opt/airflow/logs
   depends_on: &airflow-common-depends-on
@@ -135,6 +149,12 @@ services:
           --password "${AIRFLOW_ADMIN_PASSWORD}" \
           --firstname Admin --lastname User \
           --role Admin --email "${AIRFLOW_ADMIN_EMAIL:-admin@example.com}" || true
+        echo "==> Creando connection spark_default..."
+        runuser -u airflow -- airflow connections delete spark_default 2>/dev/null || true
+        runuser -u airflow -- airflow connections add spark_default \
+          --conn-type spark \
+          --conn-host spark://spark-master \
+          --conn-port 7077 || true
         echo "==> Creando pools usados por los DAGs de ejemplo..."
         runuser -u airflow -- airflow pools set compute_pool 8 "Pool para tareas de transformacion" || true
         runuser -u airflow -- airflow pools set io_pool      4 "Pool para tareas de I/O a base de datos" || true
@@ -151,6 +171,19 @@ services:
     <<: *airflow-common
     container_name: airflow-webserver
     command: webserver
+    volumes:
+      # Se repiten los montajes comunes porque definir "volumes" en el servicio
+      # SUSTITUYE por completo la lista del ancla, no la amplia.
+      - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/plugins:/opt/airflow/plugins
+      - ./airflow/config:/opt/airflow/config
+      - ./spark/jobs:/opt/spark-apps
+      - spark_data:/opt/spark-data
+      - ./airflow/logs:/opt/airflow/logs
+      # Configuracion de autenticacion de la UI. Airflow lo busca justo aqui.
+      # Si el archivo no existe en el host, Docker crea una CARPETA con ese
+      # nombre y el webserver falla al arrancar. Verifica que existe.
+      - ./airflow/config/webserver_config.py:/opt/airflow/webserver_config.py:ro
     ports:
       - "${AIRFLOW_WEB_PORT:-8080}:8080"
     healthcheck:
@@ -195,6 +228,10 @@ services:
   airflow-worker:
     <<: *airflow-common
     command: celery worker --queues ${WORKER_QUEUES:-default}
+    # Numero de workers por defecto. Se puede sobrescribir en caliente con:
+    #   docker compose -f <archivo> up -d --scale airflow-worker=N
+    deploy:
+      replicas: ${AIRFLOW_WORKER_REPLICAS:-2}
     healthcheck:
       test: ["CMD-SHELL", 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"']
       interval: 30s
@@ -235,52 +272,115 @@ services:
   # SPARK
   # ==========================================================================
 
+  # --------------------------------------------------------------------------
+  # PERMISOS DE LOS VOLUMENES COMPARTIDOS
+  #
+  # La imagen oficial apache/spark corre como el usuario "spark" (uid 185).
+  # Los contenedores de Airflow corren como uid 50000. Un volumen nombrado
+  # recien creado pertenece a root, asi que NINGUNO de los dos puede escribir.
+  #
+  # Este contenedor corre una vez, ajusta los permisos y termina.
+  # El 777 es para desarrollo: es un area de trabajo compartida entre dos
+  # usuarios distintos. En produccion esto va en almacenamiento externo
+  # (S3, HDFS, NFS) con permisos gestionados de verdad, no en un volumen local.
+  # --------------------------------------------------------------------------
+  spark-init:
+    image: busybox:1.36
+    container_name: spark-init
+    command: sh -c "mkdir -p /data /events && chmod -R 777 /data /events && echo 'permisos ajustados'"
+    volumes:
+      - spark_data:/data
+      - spark_events:/events
+    networks:
+      - airflow-network
+    restart: "no"
+
+  # --------------------------------------------------------------------------
+  # SPARK MASTER
+  #
+  # OJO — DIFERENCIA CLAVE CON BITNAMI:
+  # Las variables SPARK_MODE, SPARK_MASTER_URL, SPARK_WORKER_MEMORY y todas las
+  # SPARK_RPC_* NO EXISTEN en Spark. Son invento del entrypoint de Bitnami.
+  # La imagen oficial las ignora por completo: no hay nada que las lea.
+  #
+  # Con apache/spark hay que invocar la clase Java directamente, que es lo que
+  # Bitnami hacia por debajo.
+  # --------------------------------------------------------------------------
   spark-master:
-    image: bitnami/spark:${SPARK_IMAGE_TAG:-3.5.3}
+    image: ${SPARK_IMAGE:-apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
     container_name: spark-master
+    # Se sobrescribe el entrypoint de la imagen (pensado para Kubernetes) para
+    # que el arranque sea determinista y no dependa de su modo pass-through.
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command:
+      - org.apache.spark.deploy.master.Master
+      - --host
+      - spark-master
+      - --port
+      - "7077"
+      - --webui-port
+      - "8080"
     environment:
-      SPARK_MODE: master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "yes"
-      SPARK_RPC_AUTHENTICATION_SECRET: ${SPARK_RPC_SECRET}
-      SPARK_RPC_ENCRYPTION_ENABLED: "yes"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "yes"
-      SPARK_USER: spark
+      # Opciones JVM del master. Aqui se activa la autenticacion (ver abajo).
+      SPARK_MASTER_OPTS: ${SPARK_MASTER_OPTS:-}
+      SPARK_PUBLIC_DNS: spark-master
     volumes:
       - ./spark/jobs:/opt/spark-apps
       - spark_events:/opt/spark-events
+      - spark_data:/opt/spark-data
     ports:
       - "${SPARK_MASTER_UI_PORT:-8082}:8080"   # UI  (8082 para no chocar con Airflow)
       - "${SPARK_MASTER_PORT:-7077}:7077"      # submit
+    # La imagen oficial NO trae curl. El healthcheck anterior fallaba siempre,
+    # el master nunca llegaba a "healthy" y el worker se quedaba esperando para
+    # siempre por el depends_on. Esta prueba usa solo bash: abre un socket TCP.
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8080' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
       start_period: 30s
+    depends_on:
+      spark-init:
+        condition: service_completed_successfully
     networks:
       - airflow-network
     restart: unless-stopped
     logging: *default-logging
 
   # --------------------------------------------------------------------------
-  # SPARK WORKER  --  TAMBIEN ESCALABLE
-  #   docker compose -f docker-compose.ubuntu.yml up -d --scale spark-worker=4
+  # SPARK WORKER  --  ESCALABLE
+  #   docker compose -f docker-compose.ubuntu.yml up -d --scale spark-worker=3
+  #
+  # --cores y --memory van como ARGUMENTOS explicitos, no como variables de
+  # entorno. Asi no dependemos de que la clase Worker las lea del entorno.
   # --------------------------------------------------------------------------
   spark-worker:
-    image: bitnami/spark:${SPARK_IMAGE_TAG:-3.5.3}
+    image: ${SPARK_IMAGE:-apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
+    deploy:
+      replicas: ${SPARK_WORKER_REPLICAS:-1}
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command:
+      - org.apache.spark.deploy.worker.Worker
+      - spark://spark-master:7077
+      - --cores
+      - "${SPARK_WORKER_CORES:-2}"
+      - --memory
+      - "${SPARK_WORKER_MEMORY:-2G}"
+      - --webui-port
+      - "8081"
     environment:
-      SPARK_MODE: worker
-      SPARK_MASTER_URL: spark://spark-master:7077
-      SPARK_WORKER_MEMORY: ${SPARK_WORKER_MEMORY:-2G}
-      SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
-      SPARK_RPC_AUTHENTICATION_ENABLED: "yes"
-      SPARK_RPC_AUTHENTICATION_SECRET: ${SPARK_RPC_SECRET}
-      SPARK_RPC_ENCRYPTION_ENABLED: "yes"
-      SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "yes"
-      SPARK_USER: spark
+      SPARK_WORKER_OPTS: ${SPARK_WORKER_OPTS:-}
     volumes:
       - ./spark/jobs:/opt/spark-apps
       - spark_events:/opt/spark-events
+      - spark_data:/opt/spark-data
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8081' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       spark-master:
         condition: service_healthy
@@ -291,6 +391,7 @@ services:
 
 volumes:
   postgres_data:
+  spark_data:
   redis_data:
   spark_events:
 
