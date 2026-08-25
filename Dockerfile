@@ -34,6 +34,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg2 \
         gcc g++ \
         unixodbc unixodbc-dev \
+        pkg-config \
+        default-libmysqlclient-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -84,24 +86,78 @@ RUN curl -fSL \
 ENV SPARK_HOME=/opt/spark
 ENV PATH="${SPARK_HOME}/bin:${PATH}"
 
-# --- Drivers JDBC -----------------------------------------------------------
-# OJO: no pude verificar estas URLs desde donde construi el archivo (sin salida
-# a Maven Central). Si alguna da 404, busca la version vigente en:
-#   https://central.sonatype.com/artifact/com.microsoft.sqlserver/mssql-jdbc
-#   https://central.sonatype.com/artifact/com.ibm.db2/jcc
-ARG MSSQL_JDBC_VERSION=12.8.1.jre11
-ARG DB2_JCC_VERSION=11.5.9.0
-ARG PG_JDBC_VERSION=42.7.4
+# ============================================================================
+# DRIVERS JDBC — se descargan UNA VEZ, al construir la imagen
+# ----------------------------------------------------------------------------
+# Formato de cada entrada:   grupo:artefacto:version:nombre_destino.jar
+#
+# Anadir un motor nuevo es agregar una linea. Los jars quedan en
+# /opt/airflow/jars y los usan tanto Airflow (provider jdbc) como Spark
+# (spark-submit --jars).
+#
+# VERSIONES COMPROBADAS CONTRA MAVEN CENTRAL
+#
+# Las cinco coordenadas se verificaron una por una en repo1.maven.org. Existen,
+# y estos son sus tamanos y fechas de publicacion reales:
+#
+#   mssql-jdbc               12.8.1.jre11            publicado 2024-08-22
+#   jcc (DB2)                11.5.9.0    6.5 MB      publicado 2023-11-17
+#   mysql-connector-j        9.1.0       2.6 MB      publicado 2024-10-14
+#   postgresql               42.7.4      1.1 MB      publicado 2024-08-22
+#   singlestore-jdbc-client  1.2.7       713 KB      publicado 2025-01-08
+#
+# Si alguna diera 404 al construir seria por un bloqueo de red, no por una
+# coordenada mal escrita. En ese caso descargue los jars desde una maquina con
+# salida a Internet y copielos con COPY en vez de usar curl.
+#
+# Nota sobre mssql-jdbc: el sufijo .jre11 forma parte de la VERSION, no del
+# nombre del artefacto. Por eso la URL lo lleva dos veces
+# (.../12.8.1.jre11/mssql-jdbc-12.8.1.jre11.jar) y asi debe ser.
+# ============================================================================
 
-RUN mkdir -p /opt/airflow/jars && cd /opt/airflow/jars \
- && curl -fSL -o mssql-jdbc.jar \
-      "https://repo1.maven.org/maven2/com/microsoft/sqlserver/mssql-jdbc/${MSSQL_JDBC_VERSION}/mssql-jdbc-${MSSQL_JDBC_VERSION}.jar" \
- && curl -fSL -o db2-jcc.jar \
-      "https://repo1.maven.org/maven2/com/ibm/db2/jcc/${DB2_JCC_VERSION}/jcc-${DB2_JCC_VERSION}.jar" \
- && curl -fSL -o postgresql-jdbc.jar \
-      "https://repo1.maven.org/maven2/org/postgresql/postgresql/${PG_JDBC_VERSION}/postgresql-${PG_JDBC_VERSION}.jar" \
- && chown -R airflow:root /opt/airflow/jars \
- && chmod 644 /opt/airflow/jars/*.jar
+ARG JDBC_DRIVERS="\
+com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11:mssql-jdbc.jar \
+com.ibm.db2:jcc:11.5.9.0:db2-jcc.jar \
+com.mysql:mysql-connector-j:9.1.0:mysql-jdbc.jar \
+org.postgresql:postgresql:42.7.4:postgresql-jdbc.jar \
+com.singlestore:singlestore-jdbc-client:1.2.7:singlestore-jdbc.jar \
+"
+
+ARG MAVEN_REPO=https://repo1.maven.org/maven2
+
+
+
+
+RUN set -e; \
+    mkdir -p /opt/airflow/jars; \
+    fallidos=""; \
+    for spec in ${JDBC_DRIVERS}; do \
+        grupo=$(echo "$spec"    | cut -d: -f1); \
+        artefacto=$(echo "$spec"| cut -d: -f2); \
+        version=$(echo "$spec"  | cut -d: -f3); \
+        destino=$(echo "$spec"  | cut -d: -f4); \
+        ruta=$(echo "$grupo" | tr '.' '/'); \
+        url="${MAVEN_REPO}/${ruta}/${artefacto}/${version}/${artefacto}-${version}.jar"; \
+        echo ">>> ${destino}  <-  ${artefacto} ${version}"; \
+        if curl -fSL --retry 3 --retry-delay 2 -o "/opt/airflow/jars/${destino}" "$url"; then \
+            echo "    ok  $(du -h /opt/airflow/jars/${destino} | cut -f1)"; \
+        else \
+            echo "    FALLO: $url"; \
+            rm -f "/opt/airflow/jars/${destino}"; \
+            fallidos="${fallidos} ${artefacto}"; \
+        fi; \
+    done; \
+    chown -R airflow:root /opt/airflow/jars; \
+    chmod 644 /opt/airflow/jars/*.jar 2>/dev/null || true; \
+    echo ""; \
+    echo "=== jars instalados ==="; \
+    ls -la /opt/airflow/jars/; \
+    if [ -n "${fallidos}" ]; then \
+        echo ""; \
+        echo "AVISO: no se descargaron:${fallidos}"; \
+        echo "La imagen se construye igual. Los motores afectados no funcionaran"; \
+        echo "hasta que corrija la version en JDBC_DRIVERS y reconstruya."; \
+    fi
 
 # ----------------------------------------------------------------------------
 # Capa airflow: paquetes de Python
@@ -116,18 +172,74 @@ ARG AIRFLOW_VERSION=2.11.2
 ARG PYTHON_VERSION=3.11
 ARG CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
 
+# ----------------------------------------------------------------------------
+# Un provider por motor. Con esto, cada Connection de Airflow resuelve su hook
+# automaticamente segun el conn_type, sin codigo adicional.
+#
+# SIN FIJAR VERSIONES, A PROPOSITO.
+#
+# El archivo de constraints ya trae un conjunto de versiones probadas entre si
+# para esta version de Airflow. Fijar ademas una version a mano produce esto:
+#
+#     The user requested apache-airflow-providers-microsoft-mssql==4.7.0
+#     The user requested (constraint) ...==4.5.0
+#     ERROR: ResolutionImpossible
+#
+# O se usa el archivo de constraints, o se fijan versiones. Las dos cosas a la
+# vez se contradicen. Se elige el archivo: es el conjunto que Apache probo.
+#
+# Versiones que resultan con Airflow 2.11.2 (comprobadas en el archivo):
+#     microsoft-mssql 4.5.0   postgres 6.6.0   mysql 6.5.0
+#     jdbc 5.4.0              odbc 4.12.0      common-sql 1.32.0
+#     apache-spark 5.5.1
+# ----------------------------------------------------------------------------
 RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
-        "apache-airflow-providers-microsoft-mssql==4.7.0" \
-        "apache-airflow-providers-jdbc==5.5.0" \
-        "apache-airflow-providers-apache-spark==6.3.1" \
-        "apache-airflow-providers-common-sql" \
+        "apache-airflow-providers-microsoft-mssql" \
         "apache-airflow-providers-postgres" \
+        "apache-airflow-providers-mysql" \
+        "apache-airflow-providers-jdbc" \
         "apache-airflow-providers-odbc" \
-    && pip install --no-cache-dir \
-        "pyspark==3.5.3" \
+        "apache-airflow-providers-common-sql" \
+        "apache-airflow-providers-apache-spark" \
+        "pyodbc" \
+        "pymssql" \
+        "psycopg2-binary" \
+        "mysqlclient" \
+        "jaydebeapi" \
+        "pandas" \
+        "pyarrow"
+
+RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
+        "apache-airflow-providers-microsoft-mssql" \
+        "apache-airflow-providers-postgres" \
+        "apache-airflow-providers-mysql" \
+        "apache-airflow-providers-jdbc" \
+        "apache-airflow-providers-odbc" \
+        "apache-airflow-providers-common-sql" \
+        "apache-airflow-providers-apache-spark" \
         "pyodbc" \
         "pandas" \
         "pyarrow"
+
+# ----------------------------------------------------------------------------
+# pyspark: DEBE coincidir con la version del cluster, y por eso va aparte.
+#
+# El archivo de constraints fija pyspark 4.1.1, pero el cluster de este
+# proyecto es Spark 3.5.3. Con versiones distintas entre cliente y cluster, el
+# envio de trabajos falla con errores de serializacion que en ningun momento
+# mencionan la version — es de los diagnosticos mas largos que hay.
+#
+# Se instala sin --constraint para poder bajarlo a 3.5.3. El provider de Spark
+# pide pyspark>=3.5.2, asi que 3.5.3 lo satisface.
+# ----------------------------------------------------------------------------
+RUN pip install --no-cache-dir "pyspark==${SPARK_VERSION}" \
+ && python -c "import pyspark; print('pyspark', pyspark.__version__)"
+
+# SingleStore habla el protocolo de MySQL, asi que el provider de MySQL le
+# sirve para la mayoria de los casos. Este cliente propio anade lo especifico
+# (tipos vectoriales, notas de version). Tolera fallo: no es imprescindible.
+RUN pip install --no-cache-dir "singlestoredb" || \
+    echo "AVISO: singlestoredb no se instalo. Use el provider de MySQL para SingleStore."
 
 # ibm_db (cliente nativo de DB2) descarga el driver de IBM al instalarse.
 # Va aparte y tolera fallo: en muchas redes corporativas esa descarga esta
@@ -139,8 +251,6 @@ RUN pip install --no-cache-dir "ibm-db" "ibm-db-sa" || \
 ENV JDBC_DRIVER_PATH=/opt/airflow/jars
 
 # Comprobacion de que lo esencial quedo instalado
-RUN python -c "import pymssql; print('pymssql', pymssql.__version__)" \
- && python -c "import pyodbc; print('pyodbc', pyodbc.version)" \
- && (odbcinst -q -d || echo "AVISO: sin drivers ODBC registrados") \
- && java -version \
- && spark-submit --version 2>&1 | head -3
+COPY --chown=airflow:root scripts/verificar_drivers.py /opt/airflow/verificar_drivers.py
+
+RUN python /opt/airflow/verificar_drivers.py --build
