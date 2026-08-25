@@ -6,8 +6,16 @@
 *.jks
 *.keytab
 
-# Los .env.windows / .env.ubuntu que se entregan traen secretos generados.
-# Si vas a versionarlos, reemplaza los valores por placeholders primero.
+# Unidades Quadlet GENERADAS. Contienen secretos resueltos en claro: systemd
+# no expande variables en Environment=, asi que la contrasena de PostgreSQL
+# acaba escrita dentro de la cadena de conexion. No se versionan y no viajan
+# en el paquete: se generan EN EL SERVIDOR con
+#     python3 scripts/generar_quadlet.py
+rhel/quadlet/
+bundle-offline/
+
+# Los .env.windows / .env.ubuntu / .env.rhel que se entregan traen secretos
+# generados. Si vas a versionarlos, reemplaza los valores por placeholders.
 
 # Airflow
 airflow/logs/

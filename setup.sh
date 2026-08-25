@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# setup.sh  ::  Preparacion del stack en UBUNTU / LINUX
+# setup.sh  ::  Preparacion del stack en LINUX (Ubuntu y RHEL/Podman)
 # ----------------------------------------------------------------------------
-# Uso:  chmod +x setup.sh && ./setup.sh
+# Uso:  chmod +x setup.sh && ./setup.sh          # Ubuntu / Debian, con Docker
+#       chmod +x setup.sh && ./setup.sh --rhel   # RHEL 9 con Podman
+#
+# El modo --rhel cambia tres cosas, no mas:
+#   - el archivo de compose al que apunta el resumen
+#   - el prefijo localhost/ en la sugerencia de AIRFLOW_IMAGE
+#   - los mensajes de instalacion (dnf en vez de apt-get)
+# Los secretos, las carpetas y el UID se generan igual en los dos casos.
 #
 # Genera el archivo .env con secretos aleatorios creados EN TU MAQUINA.
 # Ningun secreto viaja por la red ni pasa por herramientas remotas.
@@ -10,12 +17,27 @@
 
 set -euo pipefail
 
+# --- Modo: ubuntu (por defecto) o rhel --------------------------------------
+MODO="ubuntu"
+COMPOSE_FILE="docker-compose.ubuntu.yml"
+PREFIJO_IMAGEN=""
+for arg in "$@"; do
+    case "$arg" in
+        --rhel)   MODO="rhel"; COMPOSE_FILE="docker-compose.rhel.yml"
+                  PREFIJO_IMAGEN="localhost/" ;;
+        --ubuntu) MODO="ubuntu" ;;
+        -h|--help|--ayuda)
+            sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "Opcion desconocida: $arg  (use --rhel, --ubuntu o --ayuda)"; exit 2 ;;
+    esac
+done
+
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[ok]${NC} $*"; }
 warn() { echo -e "${YELLOW}[aviso]${NC} $*"; }
 err()  { echo -e "${RED}[error]${NC} $*"; }
 
-echo -e "${CYAN}=== Preparando stack Airflow + Spark (Ubuntu/Linux) ===${NC}"
+echo -e "${CYAN}=== Preparando stack Airflow + Spark (modo: ${MODO}) ===${NC}"
 
 # --- Helpers de generacion de secretos --------------------------------------
 gen_fernet() {
@@ -27,25 +49,48 @@ gen_pass() { openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c "${1:-24}"; 
 
 # --- 1. Verificar Docker ----------------------------------------------------
 if ! command -v docker >/dev/null 2>&1; then
-    err "Docker no esta instalado."
-    echo "  Instalalo con:"
-    echo "    curl -fsSL https://get.docker.com | sudo sh"
-    echo "    sudo usermod -aG docker \$USER   # luego cierra sesion y vuelve a entrar"
+    err "No encuentro el comando 'docker'."
+    if [ "$MODO" = "rhel" ]; then
+        echo "  En RHEL no hace falta Docker: se usa Podman, ya incluido."
+        echo "    sudo dnf install -y container-tools podman-docker"
+        echo "    systemctl --user enable --now podman.socket"
+        echo "    export DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/podman/podman.sock"
+        echo
+        echo "  Lo prepara todo de una vez:  ./scripts/preparar_rhel_podman.sh"
+    else
+        echo "  Instalalo con:"
+        echo "    curl -fsSL https://get.docker.com | sudo sh"
+        echo "    sudo usermod -aG docker \$USER   # cierra sesion y vuelve a entrar"
+    fi
     exit 1
 fi
 
 if ! docker info >/dev/null 2>&1; then
-    err "No puedo hablar con el daemon de Docker."
-    echo "  Prueba:  sudo systemctl start docker"
-    echo "  Si pide permisos:  sudo usermod -aG docker \$USER  (y reinicia sesion)"
+    err "El comando existe, pero el motor no responde."
+    if [ "$MODO" = "rhel" ]; then
+        echo "  Podman sin privilegios necesita su socket activo:"
+        echo "    systemctl --user enable --now podman.socket"
+        echo "    export DOCKER_HOST=unix://\$XDG_RUNTIME_DIR/podman/podman.sock"
+        echo
+        echo "  Compruebe el resto con:  ./scripts/preparar_rhel_podman.sh"
+    else
+        echo "  Prueba:  sudo systemctl start docker"
+        echo "  Si pide permisos:  sudo usermod -aG docker \$USER  (y reinicia sesion)"
+    fi
     exit 1
 fi
 ok "Docker responde"
 
 # --- 2. Verificar el plugin compose ----------------------------------------
 if ! docker compose version >/dev/null 2>&1; then
-    err "Falta el plugin 'docker compose' (v2)."
-    echo "  sudo apt-get install -y docker-compose-plugin"
+    err "Falta 'docker compose' (v2)."
+    if [ "$MODO" = "rhel" ]; then
+        echo "  No forma parte de RHEL. Dos salidas:"
+        echo "   a) instalar el binario de compose v2 (un solo archivo), o"
+        echo "   b) usar unidades Quadlet:  ver docs/RHEL_SIN_DOCKER.md"
+    else
+        echo "  sudo apt-get install -y docker-compose-plugin"
+    fi
     exit 1
 fi
 ok "docker compose $(docker compose version --short)"
@@ -100,7 +145,7 @@ COMPOSE_PROJECT_NAME=airflow-spark
 AIRFLOW_IMAGE_TAG=2.11.2-python3.11
 # Tras construir tu imagen propia (docker build -t airflow-bsg:2.11.2 .),
 # descomenta la linea siguiente. Es lo que trae SQL Server, DB2 y spark-submit.
-# AIRFLOW_IMAGE=airflow-bsg:2.11.2
+# AIRFLOW_IMAGE=${PREFIJO_IMAGEN}airflow-bsg:2.11.2
 POSTGRES_IMAGE_TAG=16-alpine
 REDIS_IMAGE_TAG=7-alpine
 SPARK_IMAGE_TAG=3.5.3
@@ -201,13 +246,13 @@ ADMIN_PASS=$(grep -E '^AIRFLOW_ADMIN_PASSWORD=' .env | cut -d= -f2)
 cat <<EOF
 
 $(echo -e "${CYAN}=== Listo. Para arrancar: ===${NC}")
-  docker compose -f docker-compose.ubuntu.yml up -d
+  docker compose -f ${COMPOSE_FILE} up -d
 
 La primera vez tarda 5-10 min (descarga ~3 GB de imagenes).
 
 Ver progreso:
-  docker compose -f docker-compose.ubuntu.yml ps
-  docker compose -f docker-compose.ubuntu.yml logs -f airflow-init
+  docker compose -f ${COMPOSE_FILE} ps
+  docker compose -f ${COMPOSE_FILE} logs -f airflow-init
 
 Cuando airflow-webserver este 'healthy':
   UI Airflow : http://localhost:8080   ($ADMIN_USER / $ADMIN_PASS)
@@ -215,6 +260,6 @@ Cuando airflow-webserver este 'healthy':
   Spark      : http://localhost:8082
 
 Escalar workers sin parar nada:
-  docker compose -f docker-compose.ubuntu.yml up -d --scale airflow-worker=5
+  docker compose -f ${COMPOSE_FILE} up -d --scale airflow-worker=5
 
 EOF
