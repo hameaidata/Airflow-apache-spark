@@ -6,6 +6,12 @@
 *.jks
 *.keytab
 
+# Material TLS. plataforma.key es LA CLAVE PRIVADA del certificado del banco:
+# quien la tenga puede suplantar las tres interfaces. No se versiona nunca.
+# El .csr y el .crt no son secretos, pero se excluyen igual para que nadie
+# instale por error el certificado de otro entorno.
+tls/
+
 # Unidades Quadlet GENERADAS. Contienen secretos resueltos en claro: systemd
 # no expande variables en Environment=, asi que la contrasena de PostgreSQL
 # acaba escrita dentro de la cadena de conexion. No se versionan y no viajan

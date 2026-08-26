@@ -46,7 +46,8 @@ $ImagenesBase = @(
     'postgres:16-alpine',
     'redis:7-alpine',
     'apache/spark:3.5.3',
-    'busybox:1.36'          # lo usa el contenedor de permisos; sin el, no arranca
+    'busybox:1.36',         # lo usa el contenedor de permisos; sin el, no arranca
+    'nginx:1.27-alpine'     # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
 )
 
 Write-Host ''
@@ -128,8 +129,8 @@ Escribir-Info 'Copiando archivos del proyecto'
 $rutas = @(
     'docker-compose.ubuntu.yml', 'docker-compose.windows.yml', 'docker-compose.rhel.yml',
     '.env.ubuntu', '.env.windows', '.env.rhel',
-    'Dockerfile', 'setup.sh', 'setup.ps1',
-    'README.md', 'README-TI.md', 'README-TI-REDUCIDO.md',
+    'Dockerfile', 'setup.sh', 'setup.ps1', 'docker-compose.tls.yml', 'nginx',
+    'README.md', 'README-TI.md', 'README-TI-REDUCIDO.md', 'README-NGINX.md',
     'README-REQUERIMIENTOS-FUNCIONAMIENTO.md', 'README_DOCKER.md',
     'airflow', 'scripts', 'spark', 'docs'
 )

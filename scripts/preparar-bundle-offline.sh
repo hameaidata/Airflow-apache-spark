@@ -52,6 +52,7 @@ IMAGENES_BASE=(
     "redis:7-alpine"
     "apache/spark:3.5.3"
     "busybox:1.36"     # lo usa el contenedor de permisos; sin el, no arranca
+    "nginx:1.27-alpine"  # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
 )
 
 echo
@@ -118,9 +119,9 @@ info "Copiando archivos del proyecto"
 for ruta in \
     docker-compose.ubuntu.yml docker-compose.windows.yml docker-compose.rhel.yml \
     .env.ubuntu .env.windows .env.rhel \
-    Dockerfile setup.sh setup.ps1 \
+    Dockerfile setup.sh setup.ps1 docker-compose.tls.yml nginx \
     README.md README-TI.md README-TI-REDUCIDO.md \
-    README-REQUERIMIENTOS-FUNCIONAMIENTO.md README_DOCKER.md \
+    README-REQUERIMIENTOS-FUNCIONAMIENTO.md README_DOCKER.md README-NGINX.md \
     airflow scripts spark docs
 do
     if [ -e "${RAIZ}/${ruta}" ]; then
@@ -167,7 +168,7 @@ done
 echo
 echo "=== Normalizando nombres de imagen ==="
 for par in \
-    "postgres:16-alpine" "redis:7-alpine" "apache/spark:3.5.3" "busybox:1.36"
+    "postgres:16-alpine" "redis:7-alpine" "apache/spark:3.5.3" "busybox:1.36" "nginx:1.27-alpine"
 do
     for prefijo in "docker.io/library/" "docker.io/" "localhost/"; do
         if docker image inspect "${prefijo}${par}" >/dev/null 2>&1; then
@@ -180,7 +181,7 @@ done
 
 echo
 echo "=== Imagenes disponibles ==="
-docker images | grep -E "airflow-bsg|postgres|redis|spark|busybox"
+docker images | grep -E "airflow-bsg|postgres|redis|spark|busybox|nginx"
 
 echo
 echo "=== Que sigue ==="
