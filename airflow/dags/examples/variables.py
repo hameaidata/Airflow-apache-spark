@@ -43,3 +43,7 @@ BT_CONN_ID = BANCO_TOTAL_CONFIG["conn_id"]
         "conn_id": "banco_total_connection"
     }
 }
+
+SQLSERVER_CONFIG ={
+    "conn_id": "sqlserver_connection"
+}

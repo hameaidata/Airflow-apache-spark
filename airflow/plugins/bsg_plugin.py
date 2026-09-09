@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from airflow.plugins_manager import AirflowPlugin
 
+from operators.spark_operator import BsgSparkJdbcOperator, BsgSparkSubmitOperator
 from operators.sp_operator import ConsultarBitacoraOperator, EjecutarSPOperator
 
 
@@ -31,6 +32,8 @@ class BsgPlugin(AirflowPlugin):
     operators = [
         EjecutarSPOperator,
         ConsultarBitacoraOperator,
+        BsgSparkSubmitOperator,
+        BsgSparkJdbcOperator,
     ]
 
     # Otros puntos de extension disponibles, por si hacen falta mas adelante:

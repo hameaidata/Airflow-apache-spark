@@ -53,19 +53,10 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.trigger_rule import TriggerRule
 
+from operators.spark_operator import BsgSparkJdbcOperator
 from operators.sp_operator import EjecutarSPOperator
 
 log = logging.getLogger(__name__)
-
-# El proveedor de Spark no viene en la imagen oficial de Airflow: lo anade el
-# Dockerfile propio. Si falta, se importa un sustituto que falla con un mensaje
-# claro. Sin este try, un ImportError dejaria el DAG ENTERO fuera de la
-# interfaz, y el sintoma no diria nada sobre Spark.
-try:
-    from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
-    SPARK_DISPONIBLE = True
-except ImportError:
-    SPARK_DISPONIBLE = False
 
 
 VARIABLE_MANIFIESTO = "orquestador_manifiesto"
@@ -109,71 +100,6 @@ MANIFIESTO = cargar_manifiesto()
 PASOS = [p for p in MANIFIESTO.get("pasos", []) if not p.get("desactivado")]
 CONN_BITACORA = MANIFIESTO.get("conexion_bitacora", "bd_negocio")
 TABLA_BITACORA = MANIFIESTO.get("tabla_bitacora", "airflow_bitacora_procesos")
-
-
-# ===========================================================================
-# TRADUCCION DE UNA CONNECTION DE AIRFLOW A PARAMETROS JDBC
-# ===========================================================================
-
-DRIVERS = {
-    "postgres": ("org.postgresql.Driver", "/opt/airflow/jars/postgresql-jdbc.jar"),
-    "mssql":    ("com.microsoft.sqlserver.jdbc.SQLServerDriver", "/opt/airflow/jars/mssql-jdbc.jar"),
-    "odbc":     ("com.microsoft.sqlserver.jdbc.SQLServerDriver", "/opt/airflow/jars/mssql-jdbc.jar"),
-    "jdbc":     ("com.ibm.db2.jcc.DB2Driver", "/opt/airflow/jars/db2-jcc.jar"),
-    "oracle":   ("oracle.jdbc.OracleDriver", "/opt/airflow/jars/ojdbc.jar"),
-}
-
-
-def url_jdbc(conn) -> str:
-    """Arma la URL JDBC segun el motor. Cada uno tiene su propia forma."""
-    if conn.conn_type == "postgres":
-        return f"jdbc:postgresql://{conn.host}:{conn.port or 5432}/{conn.schema}"
-    if conn.conn_type in ("mssql", "odbc"):
-        return (f"jdbc:sqlserver://{conn.host}:{conn.port or 1433};"
-                f"databaseName={conn.schema};encrypt=true;trustServerCertificate=true")
-    if conn.conn_type == "jdbc":
-        # En una Connection de tipo jdbc, el host YA es la URL completa
-        return conn.host
-    if conn.conn_type == "oracle":
-        return f"jdbc:oracle:thin:@{conn.host}:{conn.port or 1521}/{conn.schema}"
-    raise ValueError(f"No se como armar la URL JDBC para el motor '{conn.conn_type}'")
-
-
-def preparar_credenciales(**context) -> dict:
-    """Deja en XCom lo que el job de Spark necesita para conectarse.
-
-    La contrasena viaja por XCom, que esta cifrado en la base de metadatos.
-    No es lo ideal: lo limpio seria un gestor de secretos que el propio job
-    consultara. Queda anotado como pendiente.
-    """
-    conn = BaseHook.get_connection(CONN_BITACORA)
-    driver, jar = DRIVERS.get(conn.conn_type, (None, None))
-    if driver is None:
-        raise ValueError(f"Motor '{conn.conn_type}' sin driver JDBC configurado")
-
-    datos = {
-        "jdbc_url": url_jdbc(conn),
-        "driver": driver,
-        "jar": jar,
-        "usuario": conn.login,
-        "clave": conn.password,
-        "motor": conn.conn_type,
-    }
-    log.info("Conexion preparada | motor=%s servidor=%s base=%s",
-             conn.conn_type, conn.host, conn.schema)
-    log.info("URL JDBC: %s", datos["jdbc_url"])
-    return datos
-
-
-def sin_spark(**context):
-    """Sustituto cuando el proveedor de Spark no esta instalado."""
-    raise RuntimeError(
-        "Este paso requiere Apache Spark, pero el proveedor no esta instalado "
-        "en la imagen actual. Construya la imagen propia:\n"
-        "    docker build -t airflow-bsg:2.11.2 .\n"
-        "y descomente AIRFLOW_IMAGE en el .env.\n"
-        "Los pasos de tipo 'sql' del manifiesto si funcionan sin eso."
-    )
 
 
 def resumen(**context) -> dict:
@@ -231,11 +157,6 @@ with DAG(
 
     inicio = EmptyOperator(task_id="inicio")
 
-    t_credenciales = PythonOperator(
-        task_id="preparar_credenciales",
-        python_callable=preparar_credenciales,
-    )
-
     fin = EmptyOperator(task_id="fin", trigger_rule=TriggerRule.ALL_DONE)
 
     t_resumen = PythonOperator(
@@ -273,53 +194,42 @@ with DAG(
         # su propia bitacora, en la misma tabla que los pasos de tipo sql.
         # ---------------------------------------------------------------
         elif paso["tipo"] == "spark":
-            if not SPARK_DISPONIBLE:
-                tareas[pid] = PythonOperator(task_id=pid, python_callable=sin_spark)
-            else:
-                cfg = paso.get("spark", {})
-                xc = "ti.xcom_pull(task_ids='preparar_credenciales')"
-                args_app = [
-                    "--jdbc-url", f"{{{{ {xc}['jdbc_url'] }}}}",
-                    "--driver-class", f"{{{{ {xc}['driver'] }}}}",
-                    "--procedimiento", procedimiento,
-                    "--fecha", "{{ ds }}",
-                    "--tabla-bitacora", TABLA_BITACORA,
-                    "--dag-id", "{{ dag.dag_id }}",
-                    "--task-id", pid,
-                    "--run-id", "{{ run_id }}",
-                    "--intento", "{{ ti.try_number }}",
-                ]
-                if parametros:
-                    args_app += ["--parametros", *[str(x) for x in parametros]]
-                if cfg.get("tabla_resultado"):
-                    args_app += ["--tabla-resultado", cfg["tabla_resultado"]]
-                if cfg.get("columna_particion"):
-                    args_app += ["--columna-particion", cfg["columna_particion"],
-                                 "--particiones", str(cfg.get("particiones", 4))]
-                if cfg.get("salida_parquet"):
-                    args_app += ["--salida-parquet", cfg["salida_parquet"]]
+            cfg = paso.get("spark", {})
+            args_app = [
+                "--procedimiento", procedimiento,
+                "--fecha", "{{ ds }}",
+                "--tabla-bitacora", TABLA_BITACORA,
+                "--dag-id", "{{ dag.dag_id }}",
+                "--task-id", pid,
+                "--run-id", "{{ run_id }}",
+                "--intento", "{{ ti.try_number }}",
+            ]
+            if parametros:
+                args_app += ["--parametros", *[str(x) for x in parametros]]
+            if cfg.get("tabla_resultado"):
+                args_app += ["--tabla-resultado", cfg["tabla_resultado"]]
+            if cfg.get("columna_particion"):
+                args_app += ["--columna-particion", cfg["columna_particion"],
+                             "--particiones", str(cfg.get("particiones", 4))]
+            if cfg.get("salida_parquet"):
+                args_app += ["--salida-parquet", cfg["salida_parquet"]]
 
-                tareas[pid] = SparkSubmitOperator(
-                    task_id=pid,
-                    conn_id="spark_default",
-                    application="/opt/spark-apps/etl/ejecutar_sp_spark.py",
-                    name=f"sp_{pid}_{{{{ ds_nodash }}}}",
-                    jars=f"{{{{ {xc}['jar'] }}}}",
-                    application_args=args_app,
-                    env_vars={
-                        "ORIGEN_USUARIO": f"{{{{ {xc}['usuario'] }}}}",
-                        "ORIGEN_CLAVE": f"{{{{ {xc}['clave'] }}}}",
-                    },
-                    # executor_memory debe ser MENOR que SPARK_WORKER_MEMORY.
-                    # Si pide mas de lo que el worker anuncia, el master nunca
-                    # coloca el executor y la aplicacion se queda en WAITING.
-                    executor_memory=cfg.get("executor_memory", "1g"),
-                    executor_cores=cfg.get("executor_cores", 1),
-                    num_executors=cfg.get("num_executors", 1),
-                    conf={"spark.cores.max": str(cfg.get("cores_max", 2))},
-                    verbose=False,
-                    doc_md=paso.get("descripcion"),
-                )
+            tareas[pid] = BsgSparkJdbcOperator(
+                task_id=pid,
+                jdbc_conn_id=paso.get("conexion", CONN_BITACORA),
+                application="etl/ejecutar_sp_spark.py",
+                name=f"sp_{pid}_{{{{ ds_nodash }}}}",
+                application_args=args_app,
+                # executor_memory debe ser MENOR que SPARK_WORKER_MEMORY.
+                # Si pide mas de lo que el worker anuncia, el master nunca
+                # coloca el executor y la aplicacion se queda en WAITING.
+                executor_memory=cfg.get("executor_memory", "1g"),
+                executor_cores=cfg.get("executor_cores", 1),
+                num_executors=cfg.get("num_executors", 1),
+                cores_max=cfg.get("cores_max", 2),
+                verbose=False,
+                doc_md=paso.get("descripcion"),
+            )
         else:
             raise ValueError(
                 f"El paso '{pid}' tiene tipo '{paso['tipo']}'. "
@@ -340,14 +250,12 @@ with DAG(
                 tareas[padre] >> tareas[pid]
         else:
             # Sin dependencias declaradas, arranca al principio
-            t_credenciales >> tareas[pid]
+            inicio >> tareas[pid]
 
         tareas[pid] >> t_resumen
 
-    inicio >> t_credenciales
-
     if not PASOS:
         # Manifiesto vacio o no encontrado: el DAG aparece igual, con un aviso.
-        t_credenciales >> t_resumen
+        inicio >> t_resumen
 
     t_resumen >> fin
