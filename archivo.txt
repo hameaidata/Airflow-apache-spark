@@ -1016,3 +1016,164 @@ Database=S214649v
 Hostname=166.72.194.22
 Protocol=TCPIP
 Port=446airflow@fc8aa92e2b36:/opt/airflow$ 
+
+CREATE TABLE CFG_PROCESOS
+(
+    ID_PROCESO            BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    ACTIVO                CHAR(1) NOT NULL DEFAULT 'S',
+
+    CAPA                  VARCHAR(20) NOT NULL,
+    GRUPO_PROCESO         VARCHAR(100) NOT NULL,
+
+    ORDEN_EJECUCION       INT NOT NULL DEFAULT 1,
+
+    NOMBRE_PROCESO        VARCHAR(200) NOT NULL,
+
+    TIPO_PROCESO          VARCHAR(30) NOT NULL,
+
+    SCHEMA_ORIGEN         VARCHAR(100),
+    TABLA_ORIGEN          VARCHAR(200),
+
+    SCHEMA_DESTINO        VARCHAR(100),
+    TABLA_DESTINO         VARCHAR(200),
+
+    STORED_PROCEDURE      VARCHAR(300),
+
+    DAG_ID                VARCHAR(200),
+
+    TASK_ID               VARCHAR(200),
+
+    CONN_ID_ORIGEN        VARCHAR(100),
+    CONN_ID_DESTINO       VARCHAR(100),
+
+    SPARK_CORES           INT,
+    SPARK_EXECUTORES      INT,
+    SPARK_MEMORY_GB       DECIMAL(10,2),
+
+    FRECUENCIA            VARCHAR(30),
+
+    TIMEOUT_MINUTOS       INT,
+
+    REINTENTOS            INT DEFAULT 0,
+
+    EJECUCION_PARALELA    CHAR(1) DEFAULT 'S',
+
+    ESTADO                VARCHAR(20) DEFAULT 'ACTIVO',
+
+    USUARIO_CREACION      VARCHAR(100),
+
+    FECHA_CREACION        DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FECHA_MODIFICACION    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+
+----
+
+{
+  "CAPA": "ODS",
+  "AMBIENTE": "PRD",
+  "EJECUCION": {
+    "MODO": "NORMAL",
+    "RUN_ID": "{{ run_id }}",
+    "FECHA_PROCESO": "{{ ds }}"
+  },
+  "GRUPOS": [
+    {
+      "NOMBRE": "HM_SALDOS_CONTABLES",
+      "ORDEN": 1,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 101,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_HM_SALDOS_CONTABLES",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "STG_FSH012",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "ODS_HM_SALDOS_CONTABLES",
+          "STORED_PROCEDURE": "SP_ODS_HM_SALDOS_CONTABLES",
+          "PRE_SQL": [
+            "SELECT 1"
+          ],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_HM_SALDOS_CONTABLES"
+          ],
+          "TIMEOUT_MINUTOS": 30,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 102,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "STG_FSH031",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "STORED_PROCEDURE": "SP_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "PRE_SQL": [],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_SALDOS_DIARIOS_CONSOLIDADOS"
+          ],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 103,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_RUBRO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",osi es
+          "TABLA_ORIGEN": "TELEFONOS",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "TELEFONOS",
+          "STORED_PROCEDURE": "SP_ODS_TELEFONOS",
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        }
+      ]
+    },
+    {
+      "NOMBRE": "CUENTAS",
+      "ORDEN": 2,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 201,
+          "NOMBRE_PROCESO": "ODS_CUENTAS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "CUENTAS",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "CUENTAS",
+          "STORED_PROCEDURE": "SP_ODS_CUENTAS",
+          "PRE_SQL": [],
+          "POST_SQL": [
+            "ANALYZE TABLE ODS.CUENTAS"
+          ],
+          "TIMEOUT_MINUTOS": 30,
+          "REINTENTOS": 3,
+          "VALIDAR_CFG": true
+        }
+      ]
+    }
+  ],
+  "AUDITORIA": {
+    "REGISTRAR_LOG": true,
+    "TABLA_LOG": "MON_EJECUCIONES",
+    "REGISTRAR_REGISTROS_PROCESADOS": true,
+    "REGISTRAR_DURACION": true,
+    "REGISTRAR_ERROR": true
+  },
+  "SPARK": {
+    "HABILITADO": false,
+    "CORES": 4,
+    "EXECUTORES": 2,
+    "MEMORY_GB": 8
+  }
+}
