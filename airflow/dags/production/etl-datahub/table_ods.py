@@ -34,7 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "GRUPOS": [],
     "AUDITORIA": {
         "REGISTRAR_LOG": True,
-        "TABLA_LOG": "MON_EJECUCIONES",
+        "TABLA_LOG": "CONTROL_EJECUCIONES",
         "REGISTRAR_REGISTROS_PROCESADOS": True,
         "REGISTRAR_DURACION": True,
         "REGISTRAR_ERROR": True,
@@ -122,6 +122,7 @@ def validar_identificador(valor: str, campo: str) -> str:
 
 
 def nombre_sp(proceso: dict[str, Any]) -> str:
+    logger.info(f"Mostrando el flujo de nombre_sp")
     sp = validar_identificador(proceso["STORED_PROCEDURE"], "STORED_PROCEDURE")
     if "." in sp:
         return sp
@@ -164,6 +165,7 @@ class ConfigRepository:
                 (capa,),
             )
             columnas = [col[0].upper() for col in cursor.description]
+            logger.info(f"Columnas {columnas}")
             if "ID_PROCESO" not in columnas:
                 raise AirflowException(
                     f"{TABLA_CFG_PROCESOS} debe devolver la columna ID_PROCESO."
@@ -248,6 +250,7 @@ class ProcesoExecutor:
     @staticmethod
     def ejecutar_sp(cursor, proceso: dict[str, Any]) -> None:
         parametros = proceso.get("PARAMETROS") or []
+        logger.info(f"Mostrando los parametros {parametros}")
         marcadores = ", ".join(["%s"] * len(parametros))
         llamada = f"CALL {nombre_sp(proceso)}({marcadores})"
         logger.info("[%s] Ejecutando %s", proceso["NOMBRE_PROCESO"], llamada)
@@ -266,7 +269,9 @@ class ProcesoExecutor:
         try:
             cursor = conn.cursor()
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("PRE_SQL", []), "PRE_SQL", proceso)
+            logger.info(f"Mostrando la secuencia de la linea 1 {proceso}")
             ProcesoExecutor.ejecutar_sp(cursor, proceso)
+            logger.info(f"Mostrando la secuencia de la linea 2")
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("POST_SQL", []), "POST_SQL", proceso)
             conn.commit()
             return {"ID_PROCESO": proceso["ID_PROCESO"], "ESTADO": estado}
@@ -350,7 +355,7 @@ def ejecutar_proceso(
 ) -> dict[str, Any]:
     tipo = str(proceso.get("TIPO_PROCESO", "SP")).upper()
     usar_spark = tipo == "SPARK" or proceso.get("USAR_SPARK") is True
-
+    logger.info(f"Mostrando la ejecucion de procesos{proceso} ")
     if usar_spark or (spark_cfg.get("HABILITADO") and tipo != "SP"):
         raise AirflowException(
             "Este proceso esta marcado para Spark, pero table_ods.py todavia "
@@ -402,6 +407,7 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
     SingleStoreConnection.validar_conectividad()
     activos_db = ConfigRepository.obtener_activos(config.get("CAPA", "ODS"))
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
+    logger.info(f"[INFO] Mostrando la linea de comentario")
     proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
     proceso = validar_y_enriquecer(
         proceso_json,
@@ -409,7 +415,7 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
         config,
         nombre_grupo,
     )
-
+    logger.info(f"[INFO] Mostrandome el contenido de la respuesta {proceso}")
     if not proceso:
         return None
 
