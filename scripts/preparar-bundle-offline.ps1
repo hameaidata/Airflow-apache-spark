@@ -46,8 +46,8 @@ $ImagenesBase = @(
     'postgres:16-alpine',
     'redis:7-alpine',
     'apache/spark:3.5.3',
-    'busybox:1.36',         # lo usa el contenedor de permisos; sin el, no arranca
-    'nginx:1.27-alpine'     # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
+    'busybox:1.36'#,         # lo usa el contenedor de permisos; sin el, no arranca
+    # 'nginx:1.27-alpine'     # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
 )
 
 Write-Host ''

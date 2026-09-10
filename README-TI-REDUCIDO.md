@@ -544,7 +544,7 @@ conviene coordinarla fuera de la ventana de procesamiento nocturno.
 
 **Infraestructura**
 - [ ] 1 servidor de desarrollo (4 vCPU / 8 GB / 250 GB)
-- [ ] 1 servidor de producción (8 vCPU / 16 GB / 250 GB en volúmenes separados)
+- [ ] 1 servidor de producción (8 vCPU / 16 GB / 500 GB en volúmenes separados)
 - [ ] Volúmenes sobre LVM, ampliables en caliente
 - [ ] Registros DNS de ambos servidores
 
