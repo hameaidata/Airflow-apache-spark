@@ -27,17 +27,36 @@ from airflow.operators.python import PythonOperator
 
 logger = logging.getLogger(__name__)
 ## Lectura de variables
-config=Variable.get("CARGAR_PARQUET_CONFIG", deserialize_json=True)
-NOM_PROCESO = config["nom_proceso"]
-TABLA_CONTROL = config["tabla_control"]
-SQL_JOBS = config["sql_jobs"]
-ESTADO_INICIADO = config["estado_iniciado"]
-ESTADO_EJECUTADO = config["estado_ejecutado"]
-ESTADO_FINALIZADO = config["estado_finalizado"]
-ESTADO_ERROR = config["estado_error"]
-ERROR_SIZE_LIMIT=config["error_size_limit"]
-COMMIT_DEFAULT = config["commit_default"]
-BATCH_DEFAULT = config["batch_default"]
+config = {}
+NOM_PROCESO = ""
+TABLA_CONTROL = ""
+SQL_JOBS = ""
+ESTADO_INICIADO = "INICIADO"
+ESTADO_EJECUTADO = "EJECUTADO"
+ESTADO_FINALIZADO = "TERMINADO"
+ESTADO_ERROR = "ERROR"
+ERROR_SIZE_LIMIT = 4000
+COMMIT_DEFAULT = 1
+BATCH_DEFAULT = 10000
+
+
+def cargar_variables_config():
+    global config, NOM_PROCESO, TABLA_CONTROL, SQL_JOBS, ESTADO_INICIADO
+    global ESTADO_EJECUTADO, ESTADO_FINALIZADO, ESTADO_ERROR, ERROR_SIZE_LIMIT
+    global COMMIT_DEFAULT, BATCH_DEFAULT
+
+    config = Variable.get("CARGAR_PARQUET_CONFIG", deserialize_json=True)
+    NOM_PROCESO = config["nom_proceso"]
+    TABLA_CONTROL = config["tabla_control"]
+    SQL_JOBS = config["sql_jobs"]
+    ESTADO_INICIADO = config["estado_iniciado"]
+    ESTADO_EJECUTADO = config["estado_ejecutado"]
+    ESTADO_FINALIZADO = config["estado_finalizado"]
+    ESTADO_ERROR = config["estado_error"]
+    ERROR_SIZE_LIMIT = int(config["error_size_limit"])
+    COMMIT_DEFAULT = int(config["commit_default"])
+    BATCH_DEFAULT = int(config["batch_default"])
+    return config
 
 # CONEXIONES A LA BASE DE DATOS
 SINGLESTORE_CONN_ID = "CONEXION_SINGLESTORE"
@@ -231,25 +250,36 @@ def procesar_jobs(conn, cur, job, host_name):
     except Exception as e:
         conn.rollback()
         gestionar_control_proceso(conn = conn, cur=cur, accion='ERROR',id_log= id_log, mensaje_error =str(e))
+        raise
 
 
 
 def ejecutar_carga():
+    cargar_variables_config()
     validar_conectividad()
     conn =None
     cur = None
+    errores = []
     try:
         conn = obtener_conexion()
         cur = conn.cursor()
         host_name = socket.gethostname()
         jobs =  obtener_jobs(cur)
         for job in jobs:
-            procesar_jobs(
-                conn,
-                cur,
-                job,
-                host_name
-            )
+            try:
+                procesar_jobs(
+                    conn,
+                    cur,
+                    job,
+                    host_name
+                )
+            except Exception as exc:
+                tabla_destino = job[1] if len(job) > 1 else "?"
+                logger.exception("Fallo carga de %s", tabla_destino)
+                errores.append(f"{tabla_destino}: {exc}")
+
+        if errores:
+            raise Exception("Fallaron procesos de carga: " + " | ".join(errores))
     finally:
         if cur:
             cur.close()

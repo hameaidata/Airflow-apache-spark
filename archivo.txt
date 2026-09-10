@@ -1094,12 +1094,8 @@ CREATE TABLE CFG_PROCESOS
           "SCHEMA_DESTINO": "ODS",
           "TABLA_DESTINO": "ODS_HM_SALDOS_CONTABLES",
           "STORED_PROCEDURE": "SP_ODS_HM_SALDOS_CONTABLES",
-          "PRE_SQL": [
-            "SELECT 1"
-          ],
-          "POST_SQL": [
-            "ANALYZE TABLE DATAHUB.ODS_HM_SALDOS_CONTABLES"
-          ],
+          "PRE_SQL": ["SELECT 1"],
+          "POST_SQL": ["ANALYZE TABLE DATAHUB.ODS_HM_SALDOS_CONTABLES"],
           "TIMEOUT_MINUTOS": 30,
           "REINTENTOS": 2,
           "VALIDAR_CFG": true
@@ -1114,18 +1110,16 @@ CREATE TABLE CFG_PROCESOS
           "TABLA_DESTINO": "ODS_SALDOS_DIARIOS_CONSOLIDADOS",
           "STORED_PROCEDURE": "SP_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
           "PRE_SQL": [],
-          "POST_SQL": [
-            "ANALYZE TABLE DATAHUB.ODS_SALDOS_DIARIOS_CONSOLIDADOS"
-          ],
+          "POST_SQL": ["ANALYZE TABLE DATAHUB.ODS_SALDOS_DIARIOS_CONSOLIDADOS"],
           "TIMEOUT_MINUTOS": 20,
           "REINTENTOS": 2,
           "VALIDAR_CFG": true
         },
         {
           "ID_PROCESO": 103,
-          "NOMBRE_PROCESO": "CARGA_STG_ODS_RUBRO",
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_TELEFONOS",
           "TIPO_PROCESO": "SP",
-          "SCHEMA_ORIGEN": "STG",osi es
+          "SCHEMA_ORIGEN": "STG",
           "TABLA_ORIGEN": "TELEFONOS",
           "SCHEMA_DESTINO": "ODS",
           "TABLA_DESTINO": "TELEFONOS",
@@ -1137,32 +1131,8 @@ CREATE TABLE CFG_PROCESOS
           "VALIDAR_CFG": true
         }
       ]
-    },
-    {
-      "NOMBRE": "CUENTAS",
-      "ORDEN": 2,
-      "PARALELO": true,
-      "PROCESOS": [
-        {
-          "ID_PROCESO": 201,
-          "NOMBRE_PROCESO": "ODS_CUENTAS",
-          "TIPO_PROCESO": "SP",
-          "SCHEMA_ORIGEN": "STG",
-          "TABLA_ORIGEN": "CUENTAS",
-          "SCHEMA_DESTINO": "ODS",
-          "TABLA_DESTINO": "CUENTAS",
-          "STORED_PROCEDURE": "SP_ODS_CUENTAS",
-          "PRE_SQL": [],
-          "POST_SQL": [
-            "ANALYZE TABLE ODS.CUENTAS"
-          ],
-          "TIMEOUT_MINUTOS": 30,
-          "REINTENTOS": 3,
-          "VALIDAR_CFG": true
-        }
-      ]
     }
-  ],
+  ]
   "AUDITORIA": {
     "REGISTRAR_LOG": true,
     "TABLA_LOG": "MON_EJECUCIONES",
