@@ -1,0 +1,1179 @@
+airflow@fc8aa92e2b36:/opt/airflow$ pip show ibm_db
+Name: ibm_db
+Version: 3.3.0
+Summary: Python DBI driver for DB2 (LUW, zOS, i5)
+Home-page: http://pypi.python.org/pypi/ibm_db/
+Author: IBM Application Development Team
+Author-email: earamma.kanasavi@ibm.com
+License: Apache License 2.0
+Location: /home/airflow/.local/lib/python3.11/site-packages
+Requires: 
+Required-by: ibm_db_sa
+airflow@fc8aa92e2b36:/opt/airflow$ pip list |grep -i ibm
+ibm_db                                   3.3.0
+ibm_db_sa                                0.4.4
+airflow@fc8aa92e2b36:/opt/airflow$ python -c "import ibm_db; print(ibm_db.__file__)"
+/home/airflow/.local/lib/python3.11/site-packages/ibm_db.cpython-311-x86_64-linux-gnu.so
+airflow@fc8aa92e2b36:/opt/airflow$ python -c "import ibm_db; print(ibm_db.__version__)"
+3.3.0
+airflow@fc8aa92e2b36:/opt/airflow$ find ~/.local -type d -name clidriver 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver
+airflow@fc8aa92e2b36:/opt/airflow$ find / -type d -name clidriver 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver
+airflow@fc8aa92e2b36:/opt/airflow$ find / -name "*.lic" 2>/dev/null
+airflow@fc8aa92e2b36:/opt/airflow$ python -c "import ibm_db,os; print(os.environ.get('IBM_DB_HOME'))"
+None
+airflow@fc8aa92e2b36:/opt/airflow$ python -c "import ibm_db; print(ibm_db.__file__)"
+/home/airflow/.local/lib/python3.11/site-packages/ibm_db.cpython-311-x86_64-linux-gnu.so
+airflow@fc8aa92e2b36:/opt/airflow$ find ~/.local -iname "db2cli" 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver/bin/db2cli
+airflow@fc8aa92e2b36:/opt/airflow$ find ~/.local -iname "db2cli" 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver/bin/db2cli
+airflow@fc8aa92e2b36:/opt/airflow$ find ~/.local -iname "*clidriver*" 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver
+airflow@fc8aa92e2b36:/opt/airflow$ ls -la /home/airflow/.local/lib/python3.11/site-packages/clidriver/license
+total 52
+drwxr-xr-x 3 airflow root  4096 Aug 24 14:22 .
+drwxr-xr-x 1 airflow root  4096 Sep  3 16:50 ..
+drwxr-xr-x 2 airflow root  4096 Aug 24 14:22 UNIX
+-rwxr-xr-x 1 airflow root  6836 Aug 24 14:22 dsdriver_fixlist.html
+-rwxr-xr-x 1 airflow root  3464 Aug 24 14:22 odbc_REDIST.txt
+-rwxr-xr-x 1 airflow root 23446 Aug 24 14:22 odbc_notices.txt
+airflow@fc8aa92e2b36:/opt/airflow$ find / -type d -name clidriver 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/clidriver
+airflow@fc8aa92e2b36:/opt/airflow$ find / -name "*.lic" 2>/dev/null
+airflow@fc8aa92e2b36:/opt/airflow$ find / -name "*.lic" 2>/dev/null
+
+BUSCAR ARCHIVO DE LICENCIA
+
+airflow@fc8aa92e2b36:/opt/airflow$ find /etc /opt /usr/local -type f 2>/dev/null | grep -Ei 'license|license|\.lic$'
+/opt/spark/LICENSE
+/opt/spark/data/mllib/images/origin/license.txt
+/opt/spark/data/mllib/images/license.txt
+/opt/spark/python/lib/PY4J_LICENSE.txt
+/opt/spark/licenses/LICENSE-xmlenc.txt
+/opt/spark/licenses/LICENSE-zstd.txt
+/opt/spark/licenses/LICENSE-jquery.txt
+/opt/spark/licenses/LICENSE-paranamer.txt
+/opt/spark/licenses/LICENSE-zstd-jni.txt
+/opt/spark/licenses/LICENSE-istack-commons-runtime.txt
+/opt/spark/licenses/LICENSE-d3.min.js.txt
+/opt/spark/licenses/LICENSE-pmml-model.txt
+/opt/spark/licenses/LICENSE-vis-timeline.txt
+/opt/spark/licenses/LICENSE-py4j.txt
+/opt/spark/licenses/LICENSE-dnsjava.txt
+/opt/spark/licenses/LICENSE-minlog.txt
+/opt/spark/licenses/LICENSE-CC0.txt
+/opt/spark/licenses/LICENSE-JLargeArrays.txt
+/opt/spark/licenses/LICENSE-sbt-launch-lib.txt
+/opt/spark/licenses/LICENSE-jodd.txt
+/opt/spark/licenses/LICENSE-graphlib-dot.txt
+/opt/spark/licenses/LICENSE-AnchorJS.txt
+/opt/spark/licenses/LICENSE-jsp-api.txt
+/opt/spark/licenses/LICENSE-janino.txt
+/opt/spark/licenses/LICENSE-reflectasm.txt
+/opt/spark/licenses/LICENSE-join.txt
+/opt/spark/licenses/LICENSE-jakarta-ws-rs-api
+/opt/spark/licenses/LICENSE-bootstrap.txt
+/opt/spark/licenses/LICENSE-automaton.txt
+/opt/spark/licenses/LICENSE-javassist.html
+/opt/spark/licenses/LICENSE-json-formatter.txt
+/opt/spark/licenses/LICENSE-modernizr.txt
+/opt/spark/licenses/LICENSE-spire.txt
+/opt/spark/licenses/LICENSE-kryo.txt
+/opt/spark/licenses/LICENSE-f2j.txt
+/opt/spark/licenses/LICENSE-machinist.txt
+/opt/spark/licenses/LICENSE-protobuf.txt
+/opt/spark/licenses/LICENSE-dagre-d3.txt
+/opt/spark/licenses/LICENSE-cloudpickle.txt
+/opt/spark/licenses/LICENSE-slf4j.txt
+/opt/spark/licenses/LICENSE-matchMedia-polyfill.txt
+/opt/spark/licenses/LICENSE-scopt.txt
+/opt/spark/licenses/LICENSE-respond.txt
+/opt/spark/licenses/LICENSE-sorttable.js.txt
+/opt/spark/licenses/LICENSE-re2j.txt
+/opt/spark/licenses/LICENSE-javolution.txt
+/opt/spark/licenses/LICENSE-jakarta.activation-api.txt
+/opt/spark/licenses/LICENSE-pyrolite.txt
+/opt/spark/licenses/LICENSE-blas.txt
+/opt/spark/licenses/LICENSE-jline.txt
+/opt/spark/licenses/LICENSE-JTransforms.txt
+/opt/spark/licenses/LICENSE-antlr.txt
+/opt/spark/licenses/LICENSE-jaxb-runtime.txt
+/opt/spark/licenses/LICENSE-jakarta.xml.bind-api.txt
+/opt/spark/licenses/LICENSE-datatables.txt
+/opt/spark/licenses/LICENSE-jakarta-annotation-api
+/opt/spark/licenses/LICENSE-leveldbjni.txt
+/opt/spark/licenses/LICENSE-mustache.txt
+/opt/spark/licenses/LICENSE-javax-transaction-transaction-api.txt
+/opt/spark/licenses/LICENSE-arpack.txt
+/usr/local/lib/python3.11/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging/licenses/__init__.py
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging/licenses/_spdx.py
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.functools-4.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.text-3.12.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/tomli-2.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/zipp-3.19.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.collections-5.1.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/more_itertools-10.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typeguard-4.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/inflect-7.3.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/platformdirs-4.2.2.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/importlib_metadata-8.0.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typing_extensions-4.12.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools-79.0.1.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/pip-24.0.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/wheel-0.45.1.dist-info/LICENSE.txt
+airflow@fc8aa92e2b36:/opt/airflow$ 
+
+airflow@fc8aa92e2b36:/opt/airflow$ find /etc /opt /usr/local -type f 2>/dev/null | grep -Ei 'license|license|\.lic$'
+/opt/spark/LICENSE
+/opt/spark/data/mllib/images/origin/license.txt
+/opt/spark/data/mllib/images/license.txt
+/opt/spark/python/lib/PY4J_LICENSE.txt
+/opt/spark/licenses/LICENSE-xmlenc.txt
+/opt/spark/licenses/LICENSE-zstd.txt
+/opt/spark/licenses/LICENSE-jquery.txt
+/opt/spark/licenses/LICENSE-paranamer.txt
+/opt/spark/licenses/LICENSE-zstd-jni.txt
+/opt/spark/licenses/LICENSE-istack-commons-runtime.txt
+/opt/spark/licenses/LICENSE-d3.min.js.txt
+/opt/spark/licenses/LICENSE-pmml-model.txt
+/opt/spark/licenses/LICENSE-vis-timeline.txt
+/opt/spark/licenses/LICENSE-py4j.txt
+/opt/spark/licenses/LICENSE-dnsjava.txt
+/opt/spark/licenses/LICENSE-minlog.txt
+/opt/spark/licenses/LICENSE-CC0.txt
+/opt/spark/licenses/LICENSE-JLargeArrays.txt
+/opt/spark/licenses/LICENSE-sbt-launch-lib.txt
+/opt/spark/licenses/LICENSE-jodd.txt
+/opt/spark/licenses/LICENSE-graphlib-dot.txt
+/opt/spark/licenses/LICENSE-AnchorJS.txt
+/opt/spark/licenses/LICENSE-jsp-api.txt
+/opt/spark/licenses/LICENSE-janino.txt
+/opt/spark/licenses/LICENSE-reflectasm.txt
+/opt/spark/licenses/LICENSE-join.txt
+/opt/spark/licenses/LICENSE-jakarta-ws-rs-api
+/opt/spark/licenses/LICENSE-bootstrap.txt
+/opt/spark/licenses/LICENSE-automaton.txt
+/opt/spark/licenses/LICENSE-javassist.html
+/opt/spark/licenses/LICENSE-json-formatter.txt
+/opt/spark/licenses/LICENSE-modernizr.txt
+/opt/spark/licenses/LICENSE-spire.txt
+/opt/spark/licenses/LICENSE-kryo.txt
+/opt/spark/licenses/LICENSE-f2j.txt
+/opt/spark/licenses/LICENSE-machinist.txt
+/opt/spark/licenses/LICENSE-protobuf.txt
+/opt/spark/licenses/LICENSE-dagre-d3.txt
+/opt/spark/licenses/LICENSE-cloudpickle.txt
+/opt/spark/licenses/LICENSE-slf4j.txt
+/opt/spark/licenses/LICENSE-matchMedia-polyfill.txt
+/opt/spark/licenses/LICENSE-scopt.txt
+/opt/spark/licenses/LICENSE-respond.txt
+/opt/spark/licenses/LICENSE-sorttable.js.txt
+/opt/spark/licenses/LICENSE-re2j.txt
+/opt/spark/licenses/LICENSE-javolution.txt
+/opt/spark/licenses/LICENSE-jakarta.activation-api.txt
+/opt/spark/licenses/LICENSE-pyrolite.txt
+/opt/spark/licenses/LICENSE-blas.txt
+/opt/spark/licenses/LICENSE-jline.txt
+/opt/spark/licenses/LICENSE-JTransforms.txt
+/opt/spark/licenses/LICENSE-antlr.txt
+/opt/spark/licenses/LICENSE-jaxb-runtime.txt
+/opt/spark/licenses/LICENSE-jakarta.xml.bind-api.txt
+/opt/spark/licenses/LICENSE-datatables.txt
+/opt/spark/licenses/LICENSE-jakarta-annotation-api
+/opt/spark/licenses/LICENSE-leveldbjni.txt
+/opt/spark/licenses/LICENSE-mustache.txt
+/opt/spark/licenses/LICENSE-javax-transaction-transaction-api.txt
+/opt/spark/licenses/LICENSE-arpack.txt
+/usr/local/lib/python3.11/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging/licenses/__init__.py
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging/licenses/_spdx.py
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.functools-4.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.text-3.12.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/tomli-2.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/zipp-3.19.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.collections-5.1.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/more_itertools-10.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typeguard-4.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/inflect-7.3.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/platformdirs-4.2.2.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/importlib_metadata-8.0.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typing_extensions-4.12.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools-79.0.1.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/pip-24.0.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/wheel-0.45.1.dist-info/LICENSE.txt
+airflow@fc8aa92e2b36:/opt/airflow$ find / -type f \( -iname '*license*' -o -iname '*licence*' -o -iname '*.lic' \) 2>/dev/null
+/home/airflow/.local/lib/python3.11/site-packages/pynacl-1.6.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pynacl-1.6.2.dist-info/licenses/licenses/LICENSE.libsodium.txt
+/home/airflow/.local/lib/python3.11/site-packages/Flask_Login-0.6.3.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_openlineage-2.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/jaraco_context-6.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.APACHE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/packaging-26.0.dist-info/licenses/LICENSE.BSD
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.46.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/zipp-3.23.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/more_itertools-10.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/jaraco_functools-4.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/importlib_metadata-8.7.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/platformdirs-4.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/tomli-2.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.text-4.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pendulum-3.2.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/httpx-0.28.1.dist-info/licenses/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_mysql-6.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/frozenlist-1.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/looker_sdk-26.2.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/grpc_google_iam_v1-0.14.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_videointelligence-2.18.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/jinja2-3.1.6.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/psycopg2_binary-2.9.11.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/multidict-6.7.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/rfc3339_validator-0.1.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_docker-4.5.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/packaging-26.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/packaging-26.0.dist-info/licenses/LICENSE.APACHE
+/home/airflow/.local/lib/python3.11/site-packages/packaging-26.0.dist-info/licenses/LICENSE.BSD
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_os_login-2.19.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sagemaker_studio-1.0.24.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_storage_file_datalake-12.23.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_microsoft_azure-13.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_auth_httplib2-0.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/types_protobuf-6.32.1.20260221.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/asyncssh-2.22.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/msrestazure-0.6.4.post1.dist-info/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/lazy_object_proxy-1.12.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyroaring-1.0.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_kms-3.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_bigtable-2.35.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/snowflake/connector/vendored/urllib3/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/snowflake/connector/vendored/requests/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/snowflake/connector/nanoarrow_cpp/ArrowIterator/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_managedkafka-0.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/docker-7.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_language-2.19.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/universal_pathlib-0.2.6.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/py_spy-0.4.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pydynamodb-0.8.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_datalake_store-0.0.53.dist-info/License.txt
+/home/airflow/.local/lib/python3.11/site-packages/boto3-1.42.61.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_resource-25.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/Flask_Babel-2.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sqlparse-0.5.5.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_auth-2.49.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sortedcontainers-2.4.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_amazon-9.22.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_nvd3-0.16.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/strictyaml-1.7.3.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/ecdsa-0.19.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cachelib-0.13.0.dist-info/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/scipy/_lib/_uarray/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/scipy/integrate/LICENSE_DOP
+/home/airflow/.local/lib/python3.11/site-packages/scipy/fft/_pocketfft/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/colorful-0.5.8.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/rich-13.9.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_common-1.1.28.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_exporter_otlp_proto_common-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dataflow_client-0.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_odbc-4.12.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_servicebus-7.14.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/redshift_connector-2.1.12.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tzlocal-5.3.1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/linkify_it_py-2.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dataplex-2.16.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mako-1.3.10.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_tasks-2.21.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/lxml-5.4.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/lxml-5.4.0.dist-info/licenses/LICENSES.txt
+/home/airflow/.local/lib/python3.11/site-packages/zstandard-0.25.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_ftp-3.14.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_hashicorp-4.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apispec-6.10.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pymssql-2.3.13.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pydantic-2.12.5.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cffi-2.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/grpcio-1.65.5.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/httplib2-0.22.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/idna-3.11.dist-info/licenses/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/duckdb-1.4.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/websockets-16.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setproctitle-1.3.7.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/setuptools-82.0.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/microsoft_kiota_http-1.9.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tiktoken-0.12.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_storage-3.9.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/msgspec-0.20.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_auth_oauthlib-1.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dataform-0.9.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/gcloud_aio_bigquery-7.1.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_cncf_kubernetes-10.13.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_datafactory-9.2.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_ssh-4.3.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google/ads/googleads/v23/enums/types/local_services_license_rejection_reason.py
+/home/airflow/.local/lib/python3.11/site-packages/google/ads/googleads/v20/enums/types/local_services_license_rejection_reason.py
+/home/airflow/.local/lib/python3.11/site-packages/google/ads/googleads/v22/enums/types/local_services_license_rejection_reason.py
+/home/airflow/.local/lib/python3.11/site-packages/google/ads/googleads/v21/enums/types/local_services_license_rejection_reason.py
+/home/airflow/.local/lib/python3.11/site-packages/amqp-5.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cron_descriptor-2.0.6.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tornado-6.5.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_translate-3.24.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tabulate-0.10.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/requests_toolbelt-1.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tomlkit-0.14.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/snowflake_connector_python-4.0.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_genai-1.66.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/immutabledict-4.3.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_build-3.35.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/litellm-1.82.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/platformdirs-4.9.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/flask-2.3.3.dist-info/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_postgres-6.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_re2-1.1.20251105.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/Flask_JWT_Extended-4.7.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/charset_normalizer-3.4.5.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_keyvault_secrets-4.10.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/h2-4.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dlp-3.34.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_core-2.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sqlalchemy_bigquery-1.16.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pandas-2.1.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/texmath/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/deflist/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/footnote/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/admon/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/container/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins/front_matter/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/wheel-0.46.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/uv-0.10.9.dist-info/licenses/LICENSE-MIT
+/home/airflow/.local/lib/python3.11/site-packages/uv-0.10.9.dist-info/licenses/LICENSE-APACHE
+/home/airflow/.local/lib/python3.11/site-packages/statsd-4.0.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/propcache-0.4.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mysql_connector_python-9.6.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/attrs-25.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_bigquery_datatransfer-3.21.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/prison-0.2.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/colorlog-6.10.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyodbc-5.3.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/microsoft_kiota_abstractions-1.9.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/dnspython-2.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_texttospeech-2.34.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_identity-1.25.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/paramiko-3.5.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pytz-2026.1.post1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_celery-3.15.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/annotated_types-0.7.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sniffio-1.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sniffio-1.3.1.dist-info/LICENSE.APACHE2
+/home/airflow/.local/lib/python3.11/site-packages/sniffio-1.3.1.dist-info/LICENSE.MIT
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_grpc-3.9.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/rpds_py-0.30.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/greenlet-3.3.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/greenlet-3.3.2.dist-info/licenses/LICENSE.PSF
+/home/airflow/.local/lib/python3.11/site-packages/azure_core-1.38.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/flask_session-0.8.0.dist-info/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/joblib-1.5.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/colorama-0.4.6.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/azure_synapse_artifacts-0.21.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyathena-3.30.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_storage_transfer-1.19.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_core-1.6.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_core-1.6.0.dist-info/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/vine-5.1.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/anyio-4.12.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_logging-3.14.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/click_plugins-1.1.1.2.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_storage-24.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/jsonpath_ng-1.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/limits-5.8.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/numpy-1.26.4.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pydata_google_auth-1.9.1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/yarl-1.23.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/scramp-1.4.8.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/markdown_it_py-4.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/markdown_it_py-4.0.0.dist-info/licenses/LICENSE.markdown-it
+/home/airflow/.local/lib/python3.11/site-packages/gevent-25.9.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-reproducible.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-flask-kerberos.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-jquery.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-jqclock.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-moment.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-pytest-capture-warnings.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSES-ui.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-elasticmock.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-eonasdan-bootstrap-datetimepicker.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-d3-tip.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-bootstrap.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-d3js.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-d3-shape.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-dagre-d3.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-bootstrap3-typeahead.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-normalize.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-datatables.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow-2.11.2.dist-info/licenses/3rd-party-licenses/LICENSE-hue.txt
+/home/airflow/.local/lib/python3.11/site-packages/tenacity-9.1.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_batch-0.20.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/marshmallow_oneofschema-3.2.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/email_validator-2.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/click-8.3.1.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/msgraph_core-1.3.8.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ruamel_yaml-0.19.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/celery-5.6.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/requests-2.32.5.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/methodtools-0.4.7.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/zope_interface-8.2.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_cosmosdb-9.9.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/zipp-3.23.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/Flask_AppBuilder-4.5.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/redis-6.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/scipy-1.17.1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/wirerope-1.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/duckdb/experimental/spark/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/wcwidth-0.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/babel-2.18.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/deprecated-1.3.1.dist-info/licenses/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/websocket_client-1.9.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/prompt_toolkit-3.0.52.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_sftp-5.7.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_monitoring-2.29.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/markupsafe-3.0.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_resource_manager-1.16.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/shellingham-1.5.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/hyperframe-6.1.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/grpcio_status-1.62.3.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/zope_event-6.1.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_api-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdit_py_plugins-0.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/inflection-0.5.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/hpack-4.1.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opencensus-0.11.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sqlalchemy_spanner-1.17.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/kubernetes-35.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/distlib-0.4.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/tqdm-4.67.3.dist-info/licenses/LICENCE
+/home/airflow/.local/lib/python3.11/site-packages/google_api_core-2.30.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_vision-3.12.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_storage_file_share-12.24.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/humanize-4.15.0.dist-info/licenses/LICENCE
+/home/airflow/.local/lib/python3.11/site-packages/fastuuid-0.14.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_resourcedetector_gcp-1.9.0a0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ijson-3.4.0.post0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_secret_manager-2.26.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/fsspec-2026.2.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/wtforms-3.2.1.dist-info/licenses/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/asn1crypto-1.5.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/flask_limiter-3.12.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/aioitertools-0.13.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_cosmos-4.15.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/more_itertools-10.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/openai-2.26.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/microsoft_kiota_serialization_text-1.9.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/croniter-6.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/thirdparty_files/psutil-7.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/thirdparty_files/colorama-0.4.6.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/aiohttp-3.12.12.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/yarl-1.20.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/aiosignal-1.3.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/propcache-0.3.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/frozenlist-1.7.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/multidict-6.4.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/attrs-25.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/idna-3.10.dist-info/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/ray/_private/runtime_env/agent/thirdparty_files/aiohappyeyeballs-2.6.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/dashboard/client/build/speedscope-1.5.3/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ray/dashboard/client/build/static/js/main.f9bf3c76.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pluggy-1.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/werkzeug/debug/shared/ICON_LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_bigquery-3.40.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_containerregistry-14.0.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sklearn/externals/array_api_compat/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sklearn/externals/array_api_extra/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/typing_extensions-4.15.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/azure_mgmt_containerinstance-10.1.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/slack_sdk-3.40.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_multipart-0.0.22.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/python_ldap-3.4.5.dist-info/licenses/LICENCE
+/home/airflow/.local/lib/python3.11/site-packages/python_ldap-3.4.5.dist-info/licenses/LICENCE.MIT
+/home/airflow/.local/lib/python3.11/site-packages/pyyaml-6.0.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/backoff-2.2.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/numpy/core/include/numpy/random/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/numpy/random/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/numpy/ma/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_exporter_otlp-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/db_dtypes-1.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/beautifulsoup4-4.14.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/soupsieve-2.8.3.dist-info/licenses/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_imap-3.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/annotated_doc-0.0.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/snowflake_snowpark_python-1.47.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/aiosignal-1.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mdurl-0.1.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/decorator-5.2.1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/elasticsearch/_sync/client/license.py
+/home/airflow/.local/lib/python3.11/site-packages/elasticsearch/_async/client/license.py
+/home/airflow/.local/lib/python3.11/site-packages/click_repl-0.3.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_appengine_logging-1.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_common_sql-1.32.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/awswrangler-3.15.1.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/argcomplete-3.6.3.dist-info/licenses/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/distro-1.9.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_semantic_conventions-0.48b0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_datacatalog-3.29.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/connexion-2.15.1.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dataproc_metastore-1.21.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_http_client-3.3.7.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/Flask_SQLAlchemy-2.5.1.dist-info/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/adal-1.2.7.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/six-1.17.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_daemon-3.1.2.dist-info/LICENSE.ASF-2
+/home/airflow/.local/lib/python3.11/site-packages/python_daemon-3.1.2.dist-info/LICENSE.GPL-3
+/home/airflow/.local/lib/python3.11/site-packages/python_dotenv-1.2.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/typing_inspection-0.4.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cachetools-6.2.6.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/oauthlib-3.3.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/urllib3-2.6.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/cattrs-26.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_elasticsearch-6.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_memcache-1.14.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_aiplatform-1.140.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_bigquery_storage-2.36.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_audit_log-0.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_automl-2.18.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/truststore/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/packaging/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.APACHE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/packaging/LICENSE.BSD
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/platformdirs/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/certifi/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/urllib3/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/pkg_resources/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/tomli_w/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/cachecontrol/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/pyproject_hooks/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/distro/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/resolvelib/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/pygments/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/tomli/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/dependency_groups/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/distlib/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/rich/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/idna/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/src/pip/_vendor/requests/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip-26.0.1.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/msrest-0.7.1.dist-info/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_proto-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyiceberg-0.11.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/rsa-4.9.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/bcrypt-5.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_pubsub-2.35.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/kombu-5.6.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_resumable_media-2.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_exporter_otlp_proto_grpc-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/httpcore-1.0.9.dist-info/licenses/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/gcloud_aio_auth-5.4.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_orchestration_airflow-1.19.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/typer-0.24.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/certifi-2026.2.25.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/microsoft_kiota_serialization_json-1.9.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/snowflake_sqlalchemy-1.9.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_snowflake-6.10.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/click_didyoumean-0.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_exporter_prometheus-0.48b0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/msgraphfs-0.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/itsdangerous-2.2.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/elastic_transport-8.17.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mysqlclient-2.2.8.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cryptography-42.0.8.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/cryptography-42.0.8.dist-info/LICENSE.APACHE
+/home/airflow/.local/lib/python3.11/site-packages/cryptography-42.0.8.dist-info/LICENSE.BSD
+/home/airflow/.local/lib/python3.11/site-packages/aiohttp_jinja2-1.6.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyjwt-2.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_redis-2.20.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/botocore-1.42.61.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/flower-2.0.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/billiard-4.2.4.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/elasticsearch-8.19.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/gunicorn-25.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/psutil-7.2.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/Flask_Caching-2.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/requests_oauthlib-1.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/adlfs-2026.2.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/filelock-3.25.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiofiles-24.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/flask_wtf-1.2.2.dist-info/licenses/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/azure_storage_blob-12.28.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/airflow/providers/google/3rd-party-licenses/LICENSES.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/providers/fab/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/swagger-ui/swagger-ui-bundle.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/swagger-ui/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/swagger-ui/swagger-ui-es-bundle.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/swagger-ui/swagger-ui-standalone-preset.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/swagger-ui/swagger-ui-es-bundle-core.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/redoc.standalone.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/moment.fc306188ce639c2310c3.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/dagDependencies.8745b65531170f644343.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/taskInstances.6ddf64dbaf15a0e9d40e.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/variableEdit.90824bd435defcfa268d.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/oss-licenses.json
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/dag.f01a863a2383b7cbca50.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/datasets.ba02313cb57bb971376a.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/grid.aabe991dfa7c6a303e0b.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/dags.d52b67cc37e3266ce4b8.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/connectionForm.3f11bdc419138bc5bbd4.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/dagre-d3.min.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/jshint.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/task.a9601c899f2679e57b7b.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/dagre-d3.core.min.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/toggleTheme.cef098a00b9dc8968c31.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/tiLog.49caa38189c080f77387.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/main.23ed6e370c0e4b6eb126.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/trigger.05832271a63357fc469b.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/airflow/www/static/dist/clusterActivity.9baddfc63bb23075f7ba.js.LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/watchtower-3.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_http-6.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/msal-1.35.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pydantic_core-2.41.5.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/authlib-1.6.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_sqlite-4.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/wrapt-2.1.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/hf_xet-1.3.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/marshmallow-3.26.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/docstring_parser-0.17.0.dist-info/licenses/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_exporter_otlp_proto_http-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/marshmallow_sqlalchemy-0.28.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/text_unidecode-1.3.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/eventlet-0.40.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ldap3-2.9.1.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pathspec-1.0.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiohttp-3.13.3.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/aiohttp-3.13.3.dist-info/licenses/vendor/llhttp/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aws_embedded_metrics-3.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiosmtplib-5.1.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_run-0.15.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_dataproc-5.25.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/werkzeug-3.1.6.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/kubernetes_asyncio-34.3.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiohttp_cors-0.8.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/dill-0.4.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/litellm/proxy/auth/litellm_license.py
+/home/airflow/.local/lib/python3.11/site-packages/alembic-1.18.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/graphviz-0.20.3.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/sqlalchemy_utils-0.42.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pandas_gbq-0.34.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/msal_extensions-1.3.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/virtualenv-21.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_crc32c-1.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/jiter-0.13.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/durationpy-0.10.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/chardet-6.0.0.post1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/asyncpg-0.31.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/regex-2026.2.28.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/sshtunnel-0.4.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/gcsfs-2026.2.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/jmespath-0.10.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_redis-4.4.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sendgrid-6.12.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/grpc_interceptor-0.15.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/opentelemetry_sdk-1.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tzdata-2025.3.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/tzdata-2025.3.dist-info/licenses/licenses/LICENSE_APACHE
+/home/airflow/.local/lib/python3.11/site-packages/SQLAlchemy-1.4.54.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/googleapis_common_protos-1.73.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/blinker-1.9.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/azure_batch-14.2.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyparsing-3.3.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/asgiref-3.11.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_slugify-8.0.4.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/rich_argparse-1.7.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyasn1-0.6.2.dist-info/licenses/LICENSE.rst
+/home/airflow/.local/lib/python3.11/site-packages/proto_plus-1.27.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyopenssl-25.1.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_compute-1.45.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pymysql-1.1.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/microsoft_kiota_authentication_azure-1.9.9.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiobotocore-3.2.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/truststore/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/packaging/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/packaging/LICENSE.APACHE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/packaging/LICENSE.BSD
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/platformdirs/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/certifi/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/urllib3/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/pkg_resources/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/tomli_w/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/cachecontrol/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/pyproject_hooks/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/distro/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/resolvelib/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/pygments/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/tomli/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/dependency_groups/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/distlib/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/rich/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/idna/LICENSE.md
+/home/airflow/.local/lib/python3.11/site-packages/pip/_vendor/requests/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pycparser-3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/clickclick-20.10.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiomysql-0.3.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/uc_micro_py-2.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/threadpoolctl-3.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/isodate-0.7.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/python_discovery-1.1.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/h11-0.16.0.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/python_dateutil-2.9.0.post0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_sendgrid-4.2.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/uritemplate-4.2.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/mmh3-5.2.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/hvac-2.4.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_spanner-3.63.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pygments-2.19.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/huggingface_hub-1.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_slack-9.7.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_api_python_client-2.192.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/aiohappyeyeballs-2.6.1.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/importlib_metadata-6.11.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_ads-29.2.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_storage_control-1.10.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_container-2.63.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_alloydb-0.8.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_google-20.0.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_analytics_admin-0.27.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/s3transfer-0.16.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/prometheus_client-0.24.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_workflows-1.20.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_smtp-2.4.2.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/google_cloud_speech-2.37.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_common_compat-1.14.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/babel/locale-data/LICENSE.unicode
+/home/airflow/.local/lib/python3.11/site-packages/gcloud_aio_storage-9.6.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/smart_open-7.5.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_common_io-1.7.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/pyasn1_modules-0.4.2.dist-info/licenses/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyarrow-18.1.0.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/SQLAlchemy_JSONField-1.0.2.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ConfigUpdater-3.2.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/protobuf-4.25.8.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/clidriver/lib/icc/N/icc/Standard_International_Program_License_Agreement.pdf
+/home/airflow/.local/lib/python3.11/site-packages/clidriver/lib/icc/C/icc/Standard_International_Program_License_Agreement.pdf
+/home/airflow/.local/lib/python3.11/site-packages/tmp/build-env-bb74_a5l/lib/python3.11/site-packages/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ibm_db_sa-0.4.4.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/ibm_db-3.3.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/sqlparams-6.2.0.dist-info/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/parsimonious-0.11.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/singlestoredb-1.17.1.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/py4j-0.10.9.7.dist-info/LICENSE.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/data/mllib/images/origin/license.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/data/mllib/images/license.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-jquery.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-d3.min.js.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-vis-timeline.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-py4j.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-CC0.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-sbt-launch-lib.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-graphlib-dot.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-AnchorJS.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-join.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-bootstrap.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-jdom.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-json-formatter.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-modernizr.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-dagre-d3.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-cloudpickle.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-matchMedia-polyfill.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-respond.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-sorttable.js.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-datatables.txt
+/home/airflow/.local/lib/python3.11/site-packages/pyspark/licenses/LICENSE-mustache.txt
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_jdbc-5.4.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/jpype1-1.6.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_microsoft_mssql-4.5.0.dist-info/licenses/LICENSE
+/home/airflow/.local/lib/python3.11/site-packages/apache_airflow_providers_apache_spark-5.5.1.dist-info/licenses/LICENSE
+/opt/spark/LICENSE
+/opt/spark/data/mllib/images/origin/license.txt
+/opt/spark/data/mllib/images/license.txt
+/opt/spark/python/lib/PY4J_LICENSE.txt
+/opt/spark/licenses/LICENSE-xmlenc.txt
+/opt/spark/licenses/LICENSE-zstd.txt
+/opt/spark/licenses/LICENSE-jquery.txt
+/opt/spark/licenses/LICENSE-paranamer.txt
+/opt/spark/licenses/LICENSE-zstd-jni.txt
+/opt/spark/licenses/LICENSE-istack-commons-runtime.txt
+/opt/spark/licenses/LICENSE-d3.min.js.txt
+/opt/spark/licenses/LICENSE-pmml-model.txt
+/opt/spark/licenses/LICENSE-vis-timeline.txt
+/opt/spark/licenses/LICENSE-py4j.txt
+/opt/spark/licenses/LICENSE-dnsjava.txt
+/opt/spark/licenses/LICENSE-minlog.txt
+/opt/spark/licenses/LICENSE-CC0.txt
+/opt/spark/licenses/LICENSE-JLargeArrays.txt
+/opt/spark/licenses/LICENSE-sbt-launch-lib.txt
+/opt/spark/licenses/LICENSE-jodd.txt
+/opt/spark/licenses/LICENSE-graphlib-dot.txt
+/opt/spark/licenses/LICENSE-AnchorJS.txt
+/opt/spark/licenses/LICENSE-jsp-api.txt
+/opt/spark/licenses/LICENSE-janino.txt
+/opt/spark/licenses/LICENSE-reflectasm.txt
+/opt/spark/licenses/LICENSE-join.txt
+/opt/spark/licenses/LICENSE-jakarta-ws-rs-api
+/opt/spark/licenses/LICENSE-bootstrap.txt
+/opt/spark/licenses/LICENSE-automaton.txt
+/opt/spark/licenses/LICENSE-javassist.html
+/opt/spark/licenses/LICENSE-json-formatter.txt
+/opt/spark/licenses/LICENSE-modernizr.txt
+/opt/spark/licenses/LICENSE-spire.txt
+/opt/spark/licenses/LICENSE-kryo.txt
+/opt/spark/licenses/LICENSE-f2j.txt
+/opt/spark/licenses/LICENSE-machinist.txt
+/opt/spark/licenses/LICENSE-protobuf.txt
+/opt/spark/licenses/LICENSE-dagre-d3.txt
+/opt/spark/licenses/LICENSE-cloudpickle.txt
+/opt/spark/licenses/LICENSE-slf4j.txt
+/opt/spark/licenses/LICENSE-matchMedia-polyfill.txt
+/opt/spark/licenses/LICENSE-scopt.txt
+/opt/spark/licenses/LICENSE-respond.txt
+/opt/spark/licenses/LICENSE-sorttable.js.txt
+/opt/spark/licenses/LICENSE-re2j.txt
+/opt/spark/licenses/LICENSE-javolution.txt
+/opt/spark/licenses/LICENSE-jakarta.activation-api.txt
+/opt/spark/licenses/LICENSE-pyrolite.txt
+/opt/spark/licenses/LICENSE-blas.txt
+/opt/spark/licenses/LICENSE-jline.txt
+/opt/spark/licenses/LICENSE-JTransforms.txt
+/opt/spark/licenses/LICENSE-antlr.txt
+/opt/spark/licenses/LICENSE-jaxb-runtime.txt
+/opt/spark/licenses/LICENSE-jakarta.xml.bind-api.txt
+/opt/spark/licenses/LICENSE-datatables.txt
+/opt/spark/licenses/LICENSE-jakarta-annotation-api
+/opt/spark/licenses/LICENSE-leveldbjni.txt
+/opt/spark/licenses/LICENSE-mustache.txt
+/opt/spark/licenses/LICENSE-javax-transaction-transaction-api.txt
+/opt/spark/licenses/LICENSE-arpack.txt
+/usr/local/lib/python3.11/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.functools-4.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/packaging-24.2.dist-info/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.context-5.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.text-3.12.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/tomli-2.0.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/autocommand-2.2.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/zipp-3.19.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/jaraco.collections-5.1.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/backports.tarfile-1.2.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/more_itertools-10.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typeguard-4.3.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/inflect-7.3.1.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/wheel-0.45.1.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/platformdirs-4.2.2.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/importlib_metadata-8.0.0.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools/_vendor/typing_extensions-4.12.2.dist-info/LICENSE
+/usr/local/lib/python3.11/site-packages/setuptools-79.0.1.dist-info/licenses/LICENSE
+/usr/local/lib/python3.11/site-packages/pip-24.0.dist-info/LICENSE.txt
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.APACHE
+/usr/local/lib/python3.11/site-packages/wheel/vendored/packaging/LICENSE.BSD
+/usr/local/lib/python3.11/site-packages/wheel-0.45.1.dist-info/LICENSE.txt
+/usr/lib/python3.11/LICENSE.txt
+airflow@fc8aa92e2b36:/opt/airflow$ 
+airflow@fc8aa92e2b36:/opt/airflow$ env | grep -Ei 'license|licence'
+airflow@fc8aa92e2b36:/opt/airflow$ printenv |grep -Ei 'license|licence'
+airflow@fc8aa92e2b36:/opt/airflow$ printenv | grep -Ei 'license|licence'
+
+
+
+airflow@fc8aa92e2b36:/opt/airflow$ 
+airflow@fc8aa92e2b36:/opt/airflow$ cat /etc/odbcinst.ini
+#en este apartado tendo que me saldría asi [ODBC] Trace=Yes TraceFile=/tmp/ODBC.trace
+[ODBC Driver 18 for SQL Server]
+Description=Microsoft ODBC Driver 18 for SQL Server
+Driver=/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.6.so.2.1
+UsageCount=1
+
+[IBM DB2 ODBC DRIVER]
+Description=IBM DB2 CLI Driver
+Driver=/home/airflow/.local/lib/python3.11/site-packages/clidriver/lib/libdb2.soairflow@fc8aa92e2b36:/opt/airflow$ 
+airflow@fc8aa92e2b36:/opt/airflow$ hostname -I
+172.18.0.9 
+
+
+VERIFICAR DESDE QUE IP SALE EL CONTENEDOR
+airflow@fc8aa92e2b36:/opt/airflow$ hostname -I
+172.18.0.9 
+esto es importante porqye el firewall del banco podría permitir 
+serviores Windows -Bantotal
+Pero bloquear
+Docker/Linux -Bantotal
+
+
+airflow@fc8aa92e2b36:/opt/airflow$ cat /etc/os-release
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
+VERSION_ID="12"
+VERSION="12 (bookworm)"
+VERSION_CODENAME=bookworm
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+airflow@fc8aa92e2b36:/opt/airflow$ uname -m
+x86_64
+airflow@fc8aa92e2b36:/opt/airflow$ which isql
+/usr/bin/isql
+airflow@fc8aa92e2b36:/opt/airflow$ isql --version 2>&1
+unixODBC 2.3.11
+airflow@fc8aa92e2b36:/opt/airflow$ odbcinst -j 2>&1
+unixODBC 2.3.11
+DRIVERS............: /etc/odbcinst.ini
+SYSTEM DATA SOURCES: /etc/odbc.ini
+FILE DATA SOURCES..: /etc/ODBCDataSources
+USER DATA SOURCES..: /home/airflow/.odbc.ini
+SQLULEN Size.......: 8
+SQLLEN Size........: 8
+SQLSETPOSIROW Size.: 8
+airflow@fc8aa92e2b36:/opt/airflow$ odbcinst -q -s 2>&1
+[BT PREPRODUCCION]
+airflow@fc8aa92e2b36:/opt/airflow$ cat /etc/odbc.ini 2>&1
+[BT PREPRODUCCION]
+Driver=IBM DB2 ODBC DRIVER
+Database=S214649v
+Hostname=166.72.194.22
+Protocol=TCPIP
+Port=446airflow@fc8aa92e2b36:/opt/airflow$ ip addr
+bash: ip: command not found
+airflow@fc8aa92e2b36:/opt/airflow$ ip route
+bash: ip: command not found
+airflow@fc8aa92e2b36:/opt/airflow$ cat /etc/resolv.conf
+# Generated by Docker Engine.
+# This file can be edited; Docker Engine will not make further changes once it
+# has been modified.
+
+nameserver 127.0.0.11
+options ndots:0
+
+# Based on host file: '/etc/resolv.conf' (internal resolver)
+# ExtServers: [host(192.168.65.7)]
+# Overrides: []
+# Option ndots from: internal
+airflow@fc8aa92e2b36:/opt/airflow$ env | grep -Ei 'proxy'|| true
+airflow@fc8aa92e2b36:/opt/airflow$ env | grep -Ei 'license|licence' || true
+airflow@fc8aa92e2b36:/opt/airflow$ odbcinst -j
+unixODBC 2.3.11
+DRIVERS............: /etc/odbcinst.ini
+SYSTEM DATA SOURCES: /etc/odbc.ini
+FILE DATA SOURCES..: /etc/ODBCDataSources
+USER DATA SOURCES..: /home/airflow/.odbc.ini
+SQLULEN Size.......: 8
+SQLLEN Size........: 8
+SQLSETPOSIROW Size.: 8
+airflow@fc8aa92e2b36:/opt/airflow$ odbcinst -q -d
+[ODBC Driver 18 for SQL Server]
+[IBM DB2 ODBC DRIVER]
+airflow@fc8aa92e2b36:/opt/airflow$ cat /etc/odbcinst.ini
+[ODBC Driver 18 for SQL Server]
+Description=Microsoft ODBC Driver 18 for SQL Server
+Driver=/opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.6.so.2.1
+UsageCount=1
+
+[IBM DB2 ODBC DRIVER]
+Description=IBM DB2 CLI Driver
+Driver=/home/airflow/.local/lib/python3.11/site-packages/clidriver/lib/libdb2.soairflow@fc8aa92e2b36:/opt/airflow$ cat /etc/odbc.ini
+[BT PREPRODUCCION]
+Driver=IBM DB2 ODBC DRIVER
+Database=S214649v
+Hostname=166.72.194.22
+Protocol=TCPIP
+Port=446airflow@fc8aa92e2b36:/opt/airflow$ 
+
+CREATE TABLE CFG_PROCESOS
+(
+    ID_PROCESO            BIGINT AUTO_INCREMENT PRIMARY KEY,
+
+    ACTIVO                CHAR(1) NOT NULL DEFAULT 'S',
+
+    CAPA                  VARCHAR(20) NOT NULL,
+    GRUPO_PROCESO         VARCHAR(100) NOT NULL,
+
+    ORDEN_EJECUCION       INT NOT NULL DEFAULT 1,
+
+    NOMBRE_PROCESO        VARCHAR(200) NOT NULL,
+
+    TIPO_PROCESO          VARCHAR(30) NOT NULL,
+
+    SCHEMA_ORIGEN         VARCHAR(100),
+    TABLA_ORIGEN          VARCHAR(200),
+
+    SCHEMA_DESTINO        VARCHAR(100),
+    TABLA_DESTINO         VARCHAR(200),
+
+    STORED_PROCEDURE      VARCHAR(300),
+
+    DAG_ID                VARCHAR(200),
+
+    TASK_ID               VARCHAR(200),
+
+    CONN_ID_ORIGEN        VARCHAR(100),
+    CONN_ID_DESTINO       VARCHAR(100),
+
+    SPARK_CORES           INT,
+    SPARK_EXECUTORES      INT,
+    SPARK_MEMORY_GB       DECIMAL(10,2),
+
+    FRECUENCIA            VARCHAR(30),
+
+    TIMEOUT_MINUTOS       INT,
+
+    REINTENTOS            INT DEFAULT 0,
+
+    EJECUCION_PARALELA    CHAR(1) DEFAULT 'S',
+
+    ESTADO                VARCHAR(20) DEFAULT 'ACTIVO',
+
+    USUARIO_CREACION      VARCHAR(100),
+
+    FECHA_CREACION        DATETIME DEFAULT CURRENT_TIMESTAMP,
+
+    FECHA_MODIFICACION    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+
+----
+
+{
+  "CAPA": "ODS",
+  "AMBIENTE": "PRD",
+  "EJECUCION": {
+    "MODO": "NORMAL",
+    "RUN_ID": "{{ run_id }}",
+    "FECHA_PROCESO": "{{ ds }}"
+  },
+  "GRUPOS": [
+    {
+      "NOMBRE": "HM_SALDOS_CONTABLES",
+      "ORDEN": 1,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 101,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_HM_SALDOS_CONTABLES",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "STG_FSH012",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "ODS_HM_SALDOS_CONTABLES",
+          "STORED_PROCEDURE": "SP_ODS_HM_SALDOS_CONTABLES",
+          "PRE_SQL": [
+            "SELECT 1"
+          ],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_HM_SALDOS_CONTABLES"
+          ],
+          "TIMEOUT_MINUTOS": 30,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 102,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "STG_FSH031",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "STORED_PROCEDURE": "SP_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "PRE_SQL": [],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_SALDOS_DIARIOS_CONSOLIDADOS"
+          ],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 103,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_RUBRO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",osi es
+          "TABLA_ORIGEN": "TELEFONOS",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "TELEFONOS",
+          "STORED_PROCEDURE": "SP_ODS_TELEFONOS",
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        }
+      ]
+    },
+    {
+      "NOMBRE": "CUENTAS",
+      "ORDEN": 2,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 201,
+          "NOMBRE_PROCESO": "ODS_CUENTAS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "STG",
+          "TABLA_ORIGEN": "CUENTAS",
+          "SCHEMA_DESTINO": "ODS",
+          "TABLA_DESTINO": "CUENTAS",
+          "STORED_PROCEDURE": "SP_ODS_CUENTAS",
+          "PRE_SQL": [],
+          "POST_SQL": [
+            "ANALYZE TABLE ODS.CUENTAS"
+          ],
+          "TIMEOUT_MINUTOS": 30,
+          "REINTENTOS": 3,
+          "VALIDAR_CFG": true
+        }
+      ]
+    }
+  ],
+  "AUDITORIA": {
+    "REGISTRAR_LOG": true,
+    "TABLA_LOG": "MON_EJECUCIONES",
+    "REGISTRAR_REGISTROS_PROCESADOS": true,
+    "REGISTRAR_DURACION": true,
+    "REGISTRAR_ERROR": true
+  },
+  "SPARK": {
+    "HABILITADO": false,
+    "CORES": 4,
+    "EXECUTORES": 2,
+    "MEMORY_GB": 8
+  }
+}
