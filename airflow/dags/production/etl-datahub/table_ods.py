@@ -51,6 +51,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 def cargar_config(parse_time: bool = False) -> dict[str, Any]:
     """Lee el JSON de Airflow usado como contrato del DAG."""
     try:
+        logger.info(f"[INFO] Iniciando la ejecucion -->>")
         return Variable.get(VARIABLE_CONFIG, deserialize_json=True)
     except Exception as exc:
         if parse_time:
@@ -66,7 +67,10 @@ def cargar_config(parse_time: bool = False) -> dict[str, Any]:
 
 
 CONFIG_PARSE = cargar_config(parse_time=True)
-
+logger.info(
+    "CONFIG_PARSE: %s",
+    CONFIG_PARSE
+)
 
 class SingleStoreConnection:
     @staticmethod
@@ -302,6 +306,7 @@ def validar_y_enriquecer(
     nombre_grupo: str,
 ) -> dict[str, Any] | None:
     validar_cfg = proceso_json.get("VALIDAR_CFG", True)
+
     if proceso_db is None:
         mensaje = (
             f"Proceso {proceso_json.get('ID_PROCESO')} / "
@@ -313,11 +318,7 @@ def validar_y_enriquecer(
         return None
 
     diferencias = []
-    for campo_json, campo_db in (
-        ("NOMBRE_PROCESO", "NOMBRE_PROCESO"),
-        ("STORED_PROCEDURE", "STORED_PROCEDURE"),
-        ("TIPO_PROCESO", "TIPO_PROCESO"),
-    ):
+    for campo_json, campo_db in (("NOMBRE_PROCESO", "NOMBRE_PROCESO"), ("STORED_PROCEDURE", "STORED_PROCEDURE"), ("TIPO_PROCESO", "TIPO_PROCESO"),):
         valor_json = proceso_json.get(campo_json)
         valor_db = proceso_db.get(campo_db)
         if valor_json and valor_db and str(valor_json).upper() != str(valor_db).upper():
@@ -380,6 +381,7 @@ def buscar_proceso_json(
 
 
 def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str, Any] | None:
+    logger.info(f"[INFO] Inciando proceso de ejecucion desde el archivo")
     context = get_current_context()
     config = render_valor(cargar_config(parse_time=False), context)
     auditoria = config.get("AUDITORIA", DEFAULT_CONFIG["AUDITORIA"])
@@ -453,7 +455,7 @@ default_args = {
 
 
 with DAG(
-    dag_id="ODS_PROCESOS",
+    dag_id="ODS_PROCESOS_DATAHUB",
     description="Orquesta procesos ODS validados contra CTL_CFG_PROCESOS y DAG_ODS_TABLAS",
     start_date=datetime(2025, 1, 1),
     schedule=None,
