@@ -8,6 +8,7 @@ import sys
 import time
 
 from pyspark.sql import SparkSession
+from pyspark import StorageLevel
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
@@ -41,6 +42,35 @@ def jdbc_options(args, usuario: str, clave: str) -> dict[str, str]:
         "password": clave,
         "batchsize": str(args.batchsize),
     }
+
+
+def normalizar_entero(valor, default: int | None = None) -> int | None:
+    if valor is None or valor == "":
+        return default
+    return int(valor)
+
+
+def buscar_valor(*fuentes, claves: tuple[str, ...]):
+    for fuente in fuentes:
+        if not fuente:
+            continue
+        for clave in claves:
+            if clave in fuente and fuente[clave] not in (None, ""):
+                return fuente[clave]
+            clave_upper = clave.upper()
+            if clave_upper in fuente and fuente[clave_upper] not in (None, ""):
+                return fuente[clave_upper]
+            clave_lower = clave.lower()
+            if clave_lower in fuente and fuente[clave_lower] not in (None, ""):
+                return fuente[clave_lower]
+    return None
+
+
+def obtener_config_spark(config: dict) -> dict:
+    spark_config = config.get("spark") or {}
+    if not isinstance(spark_config, dict):
+        raise ValueError("La llave 'spark' de la configuracion debe ser un objeto JSON")
+    return spark_config
 
 
 def ejecutar_update_jdbc(spark: SparkSession, args, usuario: str, clave: str, sql: str, params: list | tuple = ()):
@@ -166,6 +196,16 @@ def procesar_job(spark, args, usuario, clave, config: dict, job: dict):
     ruta = job["ruta"]
     tabla_destino = validar_identificador(job["tabla_destino"], "tabla_destino")
     batch_size = int(job.get("batch_size") or config.get("batch_default") or args.batchsize)
+    spark_config = obtener_config_spark(config)
+    num_partitions = normalizar_entero(
+        buscar_valor(
+            job,
+            spark_config,
+            config,
+            claves=("num_partitions", "spark_num_partitions", "NUM_PARTITIONS", "PARTICIONES"),
+        ),
+        args.num_partitions,
+    )
     id_log = None
     inicio = time.time()
 
@@ -175,15 +215,23 @@ def procesar_job(spark, args, usuario, clave, config: dict, job: dict):
         ejecutar_update_jdbc(spark, args, usuario, clave, f"TRUNCATE TABLE {tabla_destino}")
 
         df = spark.read.parquet(ruta)
-        total = df.count()
-        (
-            df.write.format("jdbc")
-            .options(**jdbc_options(args, usuario, clave))
-            .option("dbtable", tabla_destino)
-            .option("batchsize", str(batch_size))
-            .mode("append")
-            .save()
-        )
+        if num_partitions and num_partitions > 0:
+            print(f"[spark] Carga JDBC reparticionada: tabla={tabla_destino}, particiones={num_partitions}")
+            df = df.repartition(num_partitions)
+
+        df = df.persist(StorageLevel.MEMORY_AND_DISK)
+        try:
+            total = df.count()
+            (
+                df.write.format("jdbc")
+                .options(**jdbc_options(args, usuario, clave))
+                .option("dbtable", tabla_destino)
+                .option("batchsize", str(batch_size))
+                .mode("append")
+                .save()
+            )
+        finally:
+            df.unpersist()
 
         registrar_fin(spark, args, usuario, clave, config, id_log, total, time.time() - inicio)
         print(f"[spark] OK carga {tabla_destino}: {total} filas desde {ruta}")
@@ -210,6 +258,7 @@ def jobs_desde_sql(spark, args, usuario, clave, sql_jobs: str) -> list[dict]:
                 "tabla_destino": datos.get("tabla_destino") or datos.get("TABLA_DESTINO") or por_posicion(1),
                 "batch_size": datos.get("batch_size") or datos.get("BATCH_SIZE") or por_posicion(2),
                 "commit_every": datos.get("commit_every") or datos.get("COMMIT_EVERY") or por_posicion(3),
+                "num_partitions": datos.get("num_partitions") or datos.get("NUM_PARTITIONS"),
             }
         )
     return jobs
@@ -221,6 +270,7 @@ def main() -> int:
     parser.add_argument("--driver-class", required=True)
     parser.add_argument("--config-path", required=True)
     parser.add_argument("--batchsize", type=int, default=10000)
+    parser.add_argument("--num-partitions", type=int, default=4)
     parser.add_argument("--host-name", default=os.environ.get("HOSTNAME", "spark"))
     args = parser.parse_args()
 

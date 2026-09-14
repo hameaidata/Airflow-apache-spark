@@ -12,13 +12,21 @@ from pathlib import PurePosixPath
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql import types as T
+from pyspark import StorageLevel
 
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
+SIMPLE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def validar_identificador(valor: str, campo: str) -> str:
     if not valor or not IDENTIFIER_RE.match(str(valor)):
+        raise ValueError(f"{campo} invalido: {valor!r}")
+    return str(valor)
+
+
+def validar_identificador_simple(valor: str, campo: str) -> str:
+    if not valor or not SIMPLE_IDENTIFIER_RE.match(str(valor)):
         raise ValueError(f"{campo} invalido: {valor!r}")
     return str(valor)
 
@@ -68,6 +76,28 @@ def leer_consulta(spark: SparkSession, args, usuario: str, clave: str, sql: str)
         .option("dbtable", f"({sql}) AS q")
         .load()
     )
+
+
+def normalizar_entero(valor, default: int | None = None) -> int | None:
+    if valor is None or valor == "":
+        return default
+    return int(valor)
+
+
+def buscar_valor(*fuentes, claves: tuple[str, ...]):
+    for fuente in fuentes:
+        if not fuente:
+            continue
+        for clave in claves:
+            if clave in fuente and fuente[clave] not in (None, ""):
+                return fuente[clave]
+            clave_upper = clave.upper()
+            if clave_upper in fuente and fuente[clave_upper] not in (None, ""):
+                return fuente[clave_upper]
+            clave_lower = clave.lower()
+            if clave_lower in fuente and fuente[clave_lower] not in (None, ""):
+                return fuente[clave_lower]
+    return None
 
 
 def parse_dtype_map(tipos_str: str | None) -> dict[str, dict]:
@@ -122,6 +152,135 @@ def aplicar_tipos(df, dtype_map: dict[str, dict]):
                 F.col(col).cast(T.DecimalType(config["precision"], config["scale"])),
             )
     return df
+
+
+def construir_reader_jdbc(spark: SparkSession, args, usuario: str, clave: str):
+    return spark.read.format("jdbc").options(**jdbc_options(args, usuario, clave))
+
+
+def obtener_config_spark(config: dict) -> dict:
+    spark_config = config.get("spark") or {}
+    if not isinstance(spark_config, dict):
+        raise ValueError("La llave 'spark' de la configuracion debe ser un objeto JSON")
+    return spark_config
+
+
+def resolver_particionado(config: dict, row: dict, args) -> dict:
+    spark_config = obtener_config_spark(config)
+    partition_column = buscar_valor(
+        row,
+        spark_config,
+        config,
+        claves=(
+            "partition_column",
+            "spark_partition_column",
+            "PARTITION_COLUMN",
+            "COLUMNA_PARTICION",
+        ),
+    )
+    lower_bound = buscar_valor(
+        row,
+        spark_config,
+        config,
+        claves=("lower_bound", "spark_lower_bound", "LOWER_BOUND", "LIMITE_INFERIOR"),
+    )
+    upper_bound = buscar_valor(
+        row,
+        spark_config,
+        config,
+        claves=("upper_bound", "spark_upper_bound", "UPPER_BOUND", "LIMITE_SUPERIOR"),
+    )
+    num_partitions = buscar_valor(
+        row,
+        spark_config,
+        config,
+        claves=("num_partitions", "spark_num_partitions", "NUM_PARTITIONS", "PARTICIONES"),
+    )
+
+    return {
+        "partition_column": str(partition_column) if partition_column else None,
+        "lower_bound": lower_bound,
+        "upper_bound": upper_bound,
+        "num_partitions": normalizar_entero(num_partitions, args.num_partitions),
+        "output_partitions": normalizar_entero(
+            buscar_valor(
+                row,
+                spark_config,
+                config,
+                claves=("output_partitions", "spark_output_partitions", "OUTPUT_PARTITIONS"),
+            ),
+            args.num_partitions,
+        ),
+    }
+
+
+def consultar_bounds_particion(
+    spark: SparkSession,
+    args,
+    usuario: str,
+    clave: str,
+    query: str,
+    partition_column: str,
+):
+    col = validar_identificador_simple(partition_column, "partition_column")
+    bounds_sql = f"SELECT MIN({col}) AS lower_bound, MAX({col}) AS upper_bound FROM ({query}) AS src_bounds"
+    bounds = leer_consulta(spark, args, usuario, clave, bounds_sql).first()
+    if bounds is None:
+        return None, None
+    return bounds["lower_bound"], bounds["upper_bound"]
+
+
+def leer_tabla_origen(
+    spark: SparkSession,
+    args,
+    usuario: str,
+    clave: str,
+    query: str,
+    particionado: dict,
+):
+    reader = construir_reader_jdbc(spark, args, usuario, clave).option("dbtable", f"({query}) AS src")
+    partition_column = particionado.get("partition_column")
+    num_partitions = particionado.get("num_partitions")
+
+    if partition_column and num_partitions and num_partitions > 1:
+        partition_column = validar_identificador_simple(partition_column, "partition_column")
+        lower_bound = particionado.get("lower_bound")
+        upper_bound = particionado.get("upper_bound")
+        if lower_bound is None or upper_bound is None:
+            lower_bound, upper_bound = consultar_bounds_particion(
+                spark,
+                args,
+                usuario,
+                clave,
+                query,
+                partition_column,
+            )
+
+        if lower_bound is not None and upper_bound is not None and str(lower_bound) != str(upper_bound):
+            print(
+                "[spark] Lectura JDBC particionada: "
+                f"columna={partition_column}, lower={lower_bound}, upper={upper_bound}, "
+                f"particiones={num_partitions}"
+            )
+            return (
+                reader.option("partitionColumn", partition_column)
+                .option("lowerBound", str(lower_bound))
+                .option("upperBound", str(upper_bound))
+                .option("numPartitions", str(num_partitions))
+                .load()
+            )
+
+        print(
+            "[spark] Lectura JDBC sin particionar: "
+            f"bounds no utiles para columna {partition_column}"
+        )
+    else:
+        print(
+            "[spark] Lectura JDBC sin particionar: configure partition_column y "
+            "num_partitions>1 para paralelizar la extraccion desde JDBC"
+        )
+
+    return reader.load()
 
 
 def procesos_por_prioridad(parametros, procesos_config: list[dict], tipo_ejecucion: str):
@@ -298,22 +457,29 @@ def procesar_tabla(spark, args, usuario, clave, config: dict, row: dict, fecha_p
         )
         registrar_estado(spark, args, usuario, clave, tabla_log, id_log, "EJECUTANDO")
 
-        df = (
-            spark.read.format("jdbc")
-            .options(**jdbc_options(args, usuario, clave))
-            .option("dbtable", f"({construir_query(row)}) AS src")
-            .load()
-        )
+        query = construir_query(row)
+        particionado = resolver_particionado(config, row, args)
+        df = leer_tabla_origen(spark, args, usuario, clave, query, particionado)
+        columnas_origen = df.columns
         df = aplicar_tipos(df, parse_dtype_map(row.get("TIPOS")))
-        df = df.withColumn("FECHA_PROCESO", F.lit(str(fecha_proceso)).cast("date"))
+        df = df.withColumn("FECHA_PROCESO", F.lit(fecha_proceso))
         df = df.withColumn("BATCH_ID", F.lit(batch_id))
+        df = df.select("FECHA_PROCESO", *columnas_origen, "BATCH_ID")
 
-        total = df.count()
-        (
-            df.write.mode("overwrite")
-            .option("compression", "snappy")
-            .parquet(output_path)
-        )
+        output_partitions = particionado.get("output_partitions")
+        if output_partitions and output_partitions > 0:
+            df = df.repartition(output_partitions)
+
+        df = df.persist(StorageLevel.MEMORY_AND_DISK)
+        try:
+            total = df.count()
+            (
+                df.write.mode("overwrite")
+                .option("compression", "snappy")
+                .parquet(output_path)
+            )
+        finally:
+            df.unpersist()
 
         registrar_fin(spark, args, usuario, clave, tabla_log, id_log, total, time.time() - inicio)
         print(f"[spark] OK {tabla}: {total} filas -> {output_path}")
@@ -331,6 +497,7 @@ def main() -> int:
     parser.add_argument("--config-path", required=True)
     parser.add_argument("--tipo-ejecucion", default="diario")
     parser.add_argument("--fetchsize", type=int, default=10000)
+    parser.add_argument("--num-partitions", type=int, default=4)
     parser.add_argument("--host-name", default=os.environ.get("HOSTNAME", "spark"))
     args = parser.parse_args()
 

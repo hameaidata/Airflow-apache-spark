@@ -33,7 +33,7 @@ default_args = {
     "depends_on_past": False,
     "email_on_failure": False,
     "email_on_retry": False,
-    "retries": 1,
+    "retries": 3,
     "retry_delay": timedelta(minutes=5),
 }
 
@@ -65,6 +65,8 @@ with DAG(
             CONFIG_RUNTIME_PATH,
             "--tipo-ejecucion",
             "diario",
+            "--num-partitions",
+            "4",
             "--host-name",
             "airflow_spark_{{ ds_nodash }}",
         ],
@@ -84,6 +86,8 @@ with DAG(
         application_args=[
             "--config-path",
             CONFIG_RUNTIME_PATH,
+            "--num-partitions",
+            "4",
             "--host-name",
             "airflow_spark_{{ ds_nodash }}",
         ],
