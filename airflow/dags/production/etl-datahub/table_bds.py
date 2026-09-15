@@ -8,7 +8,7 @@ from typing import Any
 
 import singlestoredb as s2
 from airflow import DAG
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowSkipException
 from airflow.hooks.base import BaseHook
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator, get_current_context
@@ -154,6 +154,95 @@ def render_valor(valor: Any, context: dict[str, Any]) -> Any:
     if isinstance(valor, dict):
         return {key: render_valor(item, context) for key, item in valor.items()}
     return valor
+
+
+def normalizar_estado_activo(valor: Any, campo: str) -> bool:
+    """Convierte banderas de activacion del JSON a booleano."""
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, int):
+        return valor == 1
+    if isinstance(valor, str):
+        normalizado = valor.strip().upper()
+        if normalizado in {"S", "SI", "Y", "YES", "TRUE", "1", "ACTIVO", "HABILITADO"}:
+            return True
+        if normalizado in {"N", "NO", "FALSE", "0", "INACTIVO", "DESHABILITADO"}:
+            return False
+    raise AirflowException(
+        f"{campo} invalido: {valor!r}. Use 'S'/'N', true/false o ACTIVO/INACTIVO."
+    )
+
+
+def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str) -> bool:
+    """Indica si un proceso declarado en DAG_BDS_TABLAS debe entrar al DAG."""
+    for campo in ("ACTIVO", "HABILITADO", "ESTADO"):
+        if campo in proceso_cfg:
+            return normalizar_estado_activo(
+                proceso_cfg[campo],
+                f"GRUPOS.{nombre_grupo}.PROCESOS.{proceso_cfg.get('ID_PROCESO')}.{campo}",
+            )
+
+    raise AirflowException(
+        f"El proceso {proceso_cfg.get('ID_PROCESO')!r} / "
+        f"{proceso_cfg.get('NOMBRE_PROCESO')!r} del grupo {nombre_grupo!r} "
+        f"en {VARIABLE_CONFIG} debe declarar ACTIVO='S' o ACTIVO='N'."
+    )
+
+
+def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
+    valor = None
+    for campo in ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS"):
+        if campo in proceso_cfg:
+            valor = proceso_cfg[campo]
+            break
+
+    if valor in (None, "", []):
+        return []
+    if isinstance(valor, int):
+        return [valor]
+    if isinstance(valor, str):
+        return [int(item.strip()) for item in valor.split(",") if item.strip()]
+    if isinstance(valor, list):
+        return [int(item) for item in valor]
+
+    raise AirflowException(
+        f"Dependencias invalidas para ID_PROCESO={proceso_cfg.get('ID_PROCESO')}: {valor!r}"
+    )
+
+
+def validar_dependencias_bds(grupos_bds: list[dict[str, Any]]) -> None:
+    procesos = {
+        int(proceso["ID_PROCESO"]): proceso
+        for grupo in grupos_bds
+        for proceso in grupo.get("PROCESOS", [])
+    }
+
+    for proceso_id, proceso in procesos.items():
+        for dependencia_id in dependencias_proceso(proceso):
+            if dependencia_id not in procesos:
+                raise AirflowException(
+                    f"BDS ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
+                    f"pero esa dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
+                )
+
+    visitando: set[int] = set()
+    visitados: set[int] = set()
+
+    def visitar(proceso_id: int, ruta: list[int]) -> None:
+        if proceso_id in visitados:
+            return
+        if proceso_id in visitando:
+            ciclo = " -> ".join(str(item) for item in [*ruta, proceso_id])
+            raise AirflowException(f"Ciclo de dependencias BDS detectado: {ciclo}")
+
+        visitando.add(proceso_id)
+        for dependencia_id in dependencias_proceso(procesos[proceso_id]):
+            visitar(dependencia_id, [*ruta, proceso_id])
+        visitando.remove(proceso_id)
+        visitados.add(proceso_id)
+
+    for proceso_id in procesos:
+        visitar(proceso_id, [])
 
 
 class ConfigRepository:
@@ -407,6 +496,12 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
 
     activos_db = ConfigRepository.obtener_activos(CAPA_DEFAULT)
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
+    if not proceso_activo(proceso_json, nombre_grupo):
+        raise AirflowSkipException(
+            f"Proceso {id_proceso} del grupo {nombre_grupo!r} esta inactivo "
+            f"en {VARIABLE_CONFIG}; no se ejecuta."
+        )
+
     proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
     proceso = validar_y_enriquecer(
         proceso_json,
@@ -428,7 +523,29 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
 
 
 def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(config.get("GRUPOS", []), key=lambda item: int(item.get("ORDEN", 0)))
+    grupos_con_procesos_activos = []
+    for grupo_cfg in config.get("GRUPOS", []):
+        nombre_grupo = grupo_cfg.get("NOMBRE", "sin_nombre")
+        procesos_activos = []
+        for proceso_cfg in grupo_cfg.get("PROCESOS", []):
+            if proceso_activo(proceso_cfg, nombre_grupo):
+                procesos_activos.append(proceso_cfg)
+            else:
+                logger.info(
+                    "Proceso BDS omitido por configuracion: grupo=%s id=%s nombre=%s activo=%s",
+                    nombre_grupo,
+                    proceso_cfg.get("ID_PROCESO"),
+                    proceso_cfg.get("NOMBRE_PROCESO"),
+                    proceso_cfg.get(
+                        "ACTIVO",
+                        proceso_cfg.get("HABILITADO", proceso_cfg.get("ESTADO")),
+                    ),
+                )
+
+        if procesos_activos:
+            grupos_con_procesos_activos.append({**grupo_cfg, "PROCESOS": procesos_activos})
+
+    return sorted(grupos_con_procesos_activos, key=lambda item: int(item.get("ORDEN", 0)))
 
 
 def task_id_grupo(nombre: str) -> str:
@@ -452,6 +569,10 @@ default_args = {
 }
 
 
+GRUPOS_PARSE = grupos_ordenados(CONFIG_PARSE)
+validar_dependencias_bds(GRUPOS_PARSE)
+
+
 with DAG(
     dag_id="BDS_PROCESOS_DATAHUB",
     description="Orquesta procesos BDS desde ODS usando stored procedures en SingleStore",
@@ -462,9 +583,10 @@ with DAG(
     tags=["BDS", "ODS", "datahub", "singlestore"],
     default_args=default_args,
 ) as dag:
-    grupo_anterior = None
+    tareas_por_id = {}
+    tareas_con_dependencias = set()
 
-    for grupo_cfg in grupos_ordenados(CONFIG_PARSE):
+    for grupo_cfg in GRUPOS_PARSE:
         nombre = grupo_cfg["NOMBRE"]
         procesos = sorted(
             grupo_cfg.get("PROCESOS", []),
@@ -487,11 +609,25 @@ with DAG(
                         minutes=max(int(proceso_cfg.get("TIMEOUT_MINUTOS", 30)), 1)
                     ),
                 )
+                tareas_por_id[int(proceso_cfg["ID_PROCESO"])] = task
+                if dependencias_proceso(proceso_cfg):
+                    tareas_con_dependencias.add(int(proceso_cfg["ID_PROCESO"]))
 
-                if not grupo_cfg.get("PARALELO", False) and tarea_anterior:
+                if (
+                    not grupo_cfg.get("PARALELO", False)
+                    and tarea_anterior
+                    and int(proceso_cfg["ID_PROCESO"]) not in tareas_con_dependencias
+                ):
                     tarea_anterior >> task
                 tarea_anterior = task
 
-        if grupo_anterior:
-            grupo_anterior >> grupo_task
-        grupo_anterior = grupo_task
+    for grupo_cfg in GRUPOS_PARSE:
+        for proceso_cfg in grupo_cfg.get("PROCESOS", []):
+            proceso_id = int(proceso_cfg["ID_PROCESO"])
+            for dependencia_id in dependencias_proceso(proceso_cfg):
+                if dependencia_id not in tareas_por_id:
+                    raise AirflowException(
+                        f"ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
+                        f"pero la dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
+                    )
+                tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]

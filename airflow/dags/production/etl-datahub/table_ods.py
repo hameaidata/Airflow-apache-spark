@@ -8,7 +8,7 @@ from typing import Any
 
 import singlestoredb as s2
 from airflow import DAG
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowSkipException
 from airflow.hooks.base import BaseHook
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator, get_current_context
@@ -146,6 +146,39 @@ def render_valor(valor: Any, context: dict[str, Any]) -> Any:
     if isinstance(valor, dict):
         return {k: render_valor(v, context) for k, v in valor.items()}
     return valor
+
+
+def normalizar_estado_activo(valor: Any, campo: str) -> bool:
+    """Convierte banderas de activacion del JSON a booleano."""
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, int):
+        return valor == 1
+    if isinstance(valor, str):
+        normalizado = valor.strip().upper()
+        if normalizado in {"S", "SI", "Y", "YES", "TRUE", "1", "ACTIVO", "HABILITADO"}:
+            return True
+        if normalizado in {"N", "NO", "FALSE", "0", "INACTIVO", "DESHABILITADO"}:
+            return False
+    raise AirflowException(
+        f"{campo} invalido: {valor!r}. Use 'S'/'N', true/false o ACTIVO/INACTIVO."
+    )
+
+
+def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str) -> bool:
+    """Indica si un proceso declarado en DAG_ODS_TABLAS debe entrar al DAG."""
+    for campo in ("ACTIVO", "HABILITADO", "ESTADO"):
+        if campo in proceso_cfg:
+            return normalizar_estado_activo(
+                proceso_cfg[campo],
+                f"GRUPOS.{nombre_grupo}.PROCESOS.{proceso_cfg.get('ID_PROCESO')}.{campo}",
+            )
+
+    raise AirflowException(
+        f"El proceso {proceso_cfg.get('ID_PROCESO')!r} / "
+        f"{proceso_cfg.get('NOMBRE_PROCESO')!r} del grupo {nombre_grupo!r} "
+        f"en {VARIABLE_CONFIG} debe declarar ACTIVO='S' o ACTIVO='N'."
+    )
 
 
 class ConfigRepository:
@@ -407,6 +440,11 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
     SingleStoreConnection.validar_conectividad()
     activos_db = ConfigRepository.obtener_activos(config.get("CAPA", "ODS"))
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
+    if not proceso_activo(proceso_json, nombre_grupo):
+        raise AirflowSkipException(
+            f"Proceso {id_proceso} del grupo {nombre_grupo!r} esta inactivo "
+            f"en {VARIABLE_CONFIG}; no se ejecuta."
+        )
     logger.info(f"[INFO] Mostrando la linea de comentario")
     proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
     proceso = validar_y_enriquecer(
@@ -429,7 +467,29 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
 
 
 def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
-    return sorted(config.get("GRUPOS", []), key=lambda item: int(item.get("ORDEN", 0)))
+    grupos_con_procesos_activos = []
+    for grupo_cfg in config.get("GRUPOS", []):
+        nombre_grupo = grupo_cfg.get("NOMBRE", "sin_nombre")
+        procesos_activos = []
+        for proceso_cfg in grupo_cfg.get("PROCESOS", []):
+            if proceso_activo(proceso_cfg, nombre_grupo):
+                procesos_activos.append(proceso_cfg)
+            else:
+                logger.info(
+                    "Proceso ODS omitido por configuracion: grupo=%s id=%s nombre=%s activo=%s",
+                    nombre_grupo,
+                    proceso_cfg.get("ID_PROCESO"),
+                    proceso_cfg.get("NOMBRE_PROCESO"),
+                    proceso_cfg.get(
+                        "ACTIVO",
+                        proceso_cfg.get("HABILITADO", proceso_cfg.get("ESTADO")),
+                    ),
+                )
+
+        if procesos_activos:
+            grupos_con_procesos_activos.append({**grupo_cfg, "PROCESOS": procesos_activos})
+
+    return sorted(grupos_con_procesos_activos, key=lambda item: int(item.get("ORDEN", 0)))
 
 
 def task_id_grupo(nombre: str) -> str:
