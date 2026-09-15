@@ -17,41 +17,38 @@ from airflow.utils.task_group import TaskGroup
 
 logger = logging.getLogger(__name__)
 
-VARIABLE_CONFIG = "DAG_ODS_TABLAS"
+VARIABLE_CONFIG = "DAG_BDS_TABLAS"
 SINGLESTORE_CONN_ID = "CONEXION_SINGLESTORE"
 TABLA_CFG_PROCESOS = "CTL_CFG_PROCESOS"
+CAPA_DEFAULT = "BDS"
+AMBIENTE_DEFAULT = "PRD"
 
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
+TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+DEFAULT_AUDITORIA: dict[str, Any] = {
+    "REGISTRAR_LOG": True,
+    "TABLA_LOG": "CONTROL_EJECUCIONES",
+    "REGISTRAR_DURACION": True,
+    "REGISTRAR_ERROR": True,
+}
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "CAPA": "ODS",
-    "AMBIENTE": "PRD",
+    "CAPA": CAPA_DEFAULT,
+    "AMBIENTE": AMBIENTE_DEFAULT,
     "EJECUCION": {
         "MODO": "NORMAL",
         "RUN_ID": "{{ run_id }}",
         "FECHA_PROCESO": "{{ ds }}",
     },
     "GRUPOS": [],
-    "AUDITORIA": {
-        "REGISTRAR_LOG": True,
-        "TABLA_LOG": "CONTROL_EJECUCIONES",
-        "REGISTRAR_REGISTROS_PROCESADOS": True,
-        "REGISTRAR_DURACION": True,
-        "REGISTRAR_ERROR": True,
-    },
-    "SPARK": {
-        "HABILITADO": False,
-        "CORES": 4,
-        "EXECUTORES": 2,
-        "MEMORY_GB": 8,
-    },
+    "AUDITORIA": DEFAULT_AUDITORIA,
 }
 
 
 def cargar_config(parse_time: bool = False) -> dict[str, Any]:
-    """Lee el JSON de Airflow usado como contrato del DAG."""
+    """Lee la Variable JSON que declara los procesos BDS."""
     try:
-        logger.info(f"[INFO] Iniciando la ejecucion -->>")
         return Variable.get(VARIABLE_CONFIG, deserialize_json=True)
     except Exception as exc:
         if parse_time:
@@ -67,10 +64,7 @@ def cargar_config(parse_time: bool = False) -> dict[str, Any]:
 
 
 CONFIG_PARSE = cargar_config(parse_time=True)
-logger.info(
-    "CONFIG_PARSE: %s",
-    CONFIG_PARSE
-)
+
 
 class SingleStoreConnection:
     @staticmethod
@@ -94,7 +88,7 @@ class SingleStoreConnection:
             )
             return conn
         except Exception as exc:
-            logger.exception("[ERROR] Obtencion conexion SingleStore")
+            logger.exception("No se pudo obtener conexion SingleStore")
             raise AirflowException(str(exc)) from exc
 
     @staticmethod
@@ -116,35 +110,49 @@ class SingleStoreConnection:
 
 
 def validar_identificador(valor: str, campo: str) -> str:
-    if not valor or not IDENTIFIER_RE.match(valor):
+    if not valor or not IDENTIFIER_RE.match(str(valor)):
         raise AirflowException(f"{campo} invalido: {valor!r}")
-    return valor
+    return str(valor)
+
+
+def validar_identificadores_opcionales(proceso: dict[str, Any]) -> None:
+    for campo in (
+        "SCHEMA_ORIGEN",
+        "SCHEMA_DESTINO",
+        "TABLA_ORIGEN",
+        "TABLA_DESTINO",
+    ):
+        valor = proceso.get(campo)
+        if valor:
+            validar_identificador(str(valor), campo)
 
 
 def nombre_sp(proceso: dict[str, Any]) -> str:
-    logger.info(f"Mostrando el flujo de nombre_sp")
     sp = validar_identificador(proceso["STORED_PROCEDURE"], "STORED_PROCEDURE")
     if "." in sp:
         return sp
-    schema = proceso.get("SCHEMA_DESTINO")
+
+    schema = proceso.get("SCHEMA_DESTINO") or proceso.get("SCHEMA_SP")
     if schema:
-        return f"{validar_identificador(schema, 'SCHEMA_DESTINO')}.{sp}"
+        return f"{validar_identificador(str(schema), 'SCHEMA_DESTINO')}.{sp}"
     return sp
 
 
 def render_valor(valor: Any, context: dict[str, Any]) -> Any:
-    """Render simple para los placeholders guardados dentro del JSON."""
+    """Render simple para placeholders usados dentro del JSON."""
     if isinstance(valor, str):
         return (
             valor.replace("{{ run_id }}", context["run_id"])
             .replace("{{run_id}}", context["run_id"])
             .replace("{{ ds }}", context["ds"])
             .replace("{{ds}}", context["ds"])
+            .replace("{{ ts }}", context["ts"])
+            .replace("{{ts}}", context["ts"])
         )
     if isinstance(valor, list):
         return [render_valor(item, context) for item in valor]
     if isinstance(valor, dict):
-        return {k: render_valor(v, context) for k, v in valor.items()}
+        return {key: render_valor(item, context) for key, item in valor.items()}
     return valor
 
 
@@ -166,7 +174,7 @@ def normalizar_estado_activo(valor: Any, campo: str) -> bool:
 
 
 def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str) -> bool:
-    """Indica si un proceso declarado en DAG_ODS_TABLAS debe entrar al DAG."""
+    """Indica si un proceso declarado en DAG_BDS_TABLAS debe entrar al DAG."""
     for campo in ("ACTIVO", "HABILITADO", "ESTADO"):
         if campo in proceso_cfg:
             return normalizar_estado_activo(
@@ -179,6 +187,62 @@ def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str) -> bool:
         f"{proceso_cfg.get('NOMBRE_PROCESO')!r} del grupo {nombre_grupo!r} "
         f"en {VARIABLE_CONFIG} debe declarar ACTIVO='S' o ACTIVO='N'."
     )
+
+
+def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
+    valor = None
+    for campo in ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS"):
+        if campo in proceso_cfg:
+            valor = proceso_cfg[campo]
+            break
+
+    if valor in (None, "", []):
+        return []
+    if isinstance(valor, int):
+        return [valor]
+    if isinstance(valor, str):
+        return [int(item.strip()) for item in valor.split(",") if item.strip()]
+    if isinstance(valor, list):
+        return [int(item) for item in valor]
+
+    raise AirflowException(
+        f"Dependencias invalidas para ID_PROCESO={proceso_cfg.get('ID_PROCESO')}: {valor!r}"
+    )
+
+
+def validar_dependencias_bds(grupos_bds: list[dict[str, Any]]) -> None:
+    procesos = {
+        int(proceso["ID_PROCESO"]): proceso
+        for grupo in grupos_bds
+        for proceso in grupo.get("PROCESOS", [])
+    }
+
+    for proceso_id, proceso in procesos.items():
+        for dependencia_id in dependencias_proceso(proceso):
+            if dependencia_id not in procesos:
+                raise AirflowException(
+                    f"BDS ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
+                    f"pero esa dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
+                )
+
+    visitando: set[int] = set()
+    visitados: set[int] = set()
+
+    def visitar(proceso_id: int, ruta: list[int]) -> None:
+        if proceso_id in visitados:
+            return
+        if proceso_id in visitando:
+            ciclo = " -> ".join(str(item) for item in [*ruta, proceso_id])
+            raise AirflowException(f"Ciclo de dependencias BDS detectado: {ciclo}")
+
+        visitando.add(proceso_id)
+        for dependencia_id in dependencias_proceso(procesos[proceso_id]):
+            visitar(dependencia_id, [*ruta, proceso_id])
+        visitando.remove(proceso_id)
+        visitados.add(proceso_id)
+
+    for proceso_id in procesos:
+        visitar(proceso_id, [])
 
 
 class ConfigRepository:
@@ -198,7 +262,6 @@ class ConfigRepository:
                 (capa,),
             )
             columnas = [col[0].upper() for col in cursor.description]
-            logger.info(f"Columnas {columnas}")
             if "ID_PROCESO" not in columnas:
                 raise AirflowException(
                     f"{TABLA_CFG_PROCESOS} debe devolver la columna ID_PROCESO."
@@ -232,12 +295,11 @@ class LogRepository:
             return
 
         tabla_log = validar_identificador(
-            auditoria.get("TABLA_LOG", "MON_EJECUCIONES"),
+            auditoria.get("TABLA_LOG", "CONTROL_EJECUCIONES"),
             "AUDITORIA.TABLA_LOG",
         )
         duracion = round((fin - inicio).total_seconds(), 2)
         mensaje_error = (error or "")[:4000] if auditoria.get("REGISTRAR_ERROR", True) else None
-
         cursor = conn.cursor()
         cursor.execute(
             f"""
@@ -273,21 +335,23 @@ class ProcesoExecutor:
             if not sql or not str(sql).strip():
                 continue
             logger.info(
-                "[%s] Ejecutando %s: %s",
+                "[%s] Ejecutando %s",
                 proceso["NOMBRE_PROCESO"],
                 etapa,
-                sql,
             )
             cursor.execute(sql)
 
     @staticmethod
     def ejecutar_sp(cursor, proceso: dict[str, Any]) -> None:
-        parametros = proceso.get("PARAMETROS") or []
-        logger.info(f"Mostrando los parametros {parametros}")
+        parametros = tuple(proceso.get("PARAMETROS") or [])
         marcadores = ", ".join(["%s"] * len(parametros))
         llamada = f"CALL {nombre_sp(proceso)}({marcadores})"
-        logger.info("[%s] Ejecutando %s", proceso["NOMBRE_PROCESO"], llamada)
-        cursor.execute(llamada, tuple(parametros))
+        logger.info(
+            "[%s] Ejecutando stored procedure BDS: %s",
+            proceso["NOMBRE_PROCESO"],
+            llamada,
+        )
+        cursor.execute(llamada, parametros)
 
     @staticmethod
     def ejecutar_singlestore(
@@ -302,9 +366,7 @@ class ProcesoExecutor:
         try:
             cursor = conn.cursor()
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("PRE_SQL", []), "PRE_SQL", proceso)
-            logger.info(f"Mostrando la secuencia de la linea 1 {proceso}")
             ProcesoExecutor.ejecutar_sp(cursor, proceso)
-            logger.info(f"Mostrando la secuencia de la linea 2")
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("POST_SQL", []), "POST_SQL", proceso)
             conn.commit()
             return {"ID_PROCESO": proceso["ID_PROCESO"], "ESTADO": estado}
@@ -348,7 +410,8 @@ def validar_y_enriquecer(
     if proceso_db is None:
         mensaje = (
             f"Proceso {proceso_json.get('ID_PROCESO')} / "
-            f"{proceso_json.get('NOMBRE_PROCESO')} no esta activo en {TABLA_CFG_PROCESOS}."
+            f"{proceso_json.get('NOMBRE_PROCESO')} no esta activo en "
+            f"{TABLA_CFG_PROCESOS} para CAPA={CAPA_DEFAULT}."
         )
         if validar_cfg:
             raise AirflowException(mensaje)
@@ -356,15 +419,19 @@ def validar_y_enriquecer(
         return None
 
     diferencias = []
-    for campo_json, campo_db in (("NOMBRE_PROCESO", "NOMBRE_PROCESO"), ("STORED_PROCEDURE", "STORED_PROCEDURE"), ("TIPO_PROCESO", "TIPO_PROCESO"),):
-        valor_json = proceso_json.get(campo_json)
-        valor_db = proceso_db.get(campo_db)
+    for campo in ("NOMBRE_PROCESO", "STORED_PROCEDURE", "TIPO_PROCESO"):
+        valor_json = proceso_json.get(campo)
+        valor_db = proceso_db.get(campo)
         if valor_json and valor_db and str(valor_json).upper() != str(valor_db).upper():
-            diferencias.append(f"{campo_json}: JSON={valor_json} DB={valor_db}")
+            diferencias.append(f"{campo}: JSON={valor_json} DB={valor_db}")
 
     grupo_db = proceso_db.get("GRUPO_PROCESO")
     if grupo_db and str(grupo_db).upper() != str(nombre_grupo).upper():
         diferencias.append(f"GRUPO_PROCESO: JSON={nombre_grupo} DB={grupo_db}")
+
+    capa_db = proceso_db.get("CAPA")
+    if capa_db and str(capa_db).upper() != CAPA_DEFAULT:
+        diferencias.append(f"CAPA: esperado={CAPA_DEFAULT} DB={capa_db}")
 
     if diferencias and validar_cfg:
         raise AirflowException(
@@ -373,32 +440,24 @@ def validar_y_enriquecer(
         )
 
     proceso = {**proceso_db, **proceso_json}
-    proceso["CAPA"] = config.get("CAPA", proceso_db.get("CAPA", "ODS"))
-    proceso["AMBIENTE"] = config.get("AMBIENTE", "PRD")
+    proceso["CAPA"] = CAPA_DEFAULT
+    proceso["AMBIENTE"] = config.get("AMBIENTE", AMBIENTE_DEFAULT)
     proceso["_GRUPO_JSON"] = nombre_grupo
     proceso["PARAMETROS"] = proceso.get("PARAMETROS", [])
+    validar_identificadores_opcionales(proceso)
     return proceso
 
 
 def ejecutar_proceso(
     proceso: dict[str, Any],
     auditoria: dict[str, Any],
-    spark_cfg: dict[str, Any],
     airflow_ctx: dict[str, str],
 ) -> dict[str, Any]:
     tipo = str(proceso.get("TIPO_PROCESO", "SP")).upper()
-    usar_spark = tipo == "SPARK" or proceso.get("USAR_SPARK") is True
-    logger.info(f"Mostrando la ejecucion de procesos{proceso} ")
-    if usar_spark or (spark_cfg.get("HABILITADO") and tipo != "SP"):
-        raise AirflowException(
-            "Este proceso esta marcado para Spark, pero table_ods.py todavia "
-            "ejecuta ODS directo en SingleStore. El siguiente paso es derivar "
-            "estos procesos al plugin BsgSparkJdbcOperator."
-        )
-
     if tipo != "SP":
         raise AirflowException(
-            f"TIPO_PROCESO no soportado para {proceso['NOMBRE_PROCESO']}: {tipo}"
+            f"TIPO_PROCESO no soportado para BDS en {proceso['NOMBRE_PROCESO']}: {tipo}. "
+            "Este DAG ejecuta procedimientos almacenados en SingleStore."
         )
 
     return ProcesoExecutor.ejecutar_singlestore(proceso, auditoria, airflow_ctx)
@@ -419,11 +478,9 @@ def buscar_proceso_json(
 
 
 def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str, Any] | None:
-    logger.info(f"[INFO] Inciando proceso de ejecucion desde el archivo")
     context = get_current_context()
     config = render_valor(cargar_config(parse_time=False), context)
-    auditoria = config.get("AUDITORIA", DEFAULT_CONFIG["AUDITORIA"])
-    spark_cfg = config.get("SPARK", DEFAULT_CONFIG["SPARK"])
+    auditoria = config.get("AUDITORIA", DEFAULT_AUDITORIA)
     airflow_ctx = {
         "dag_id": context["dag"].dag_id,
         "run_id": context["run_id"],
@@ -437,15 +494,14 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
     if not grupo:
         raise AirflowException(f"Grupo {nombre_grupo!r} no existe en {VARIABLE_CONFIG}.")
 
-    SingleStoreConnection.validar_conectividad()
-    activos_db = ConfigRepository.obtener_activos(config.get("CAPA", "ODS"))
+    activos_db = ConfigRepository.obtener_activos(CAPA_DEFAULT)
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
     if not proceso_activo(proceso_json, nombre_grupo):
         raise AirflowSkipException(
             f"Proceso {id_proceso} del grupo {nombre_grupo!r} esta inactivo "
             f"en {VARIABLE_CONFIG}; no se ejecuta."
         )
-    logger.info(f"[INFO] Mostrando la linea de comentario")
+
     proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
     proceso = validar_y_enriquecer(
         proceso_json,
@@ -453,17 +509,17 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
         config,
         nombre_grupo,
     )
-    logger.info(f"[INFO] Mostrandome el contenido de la respuesta {proceso}")
     if not proceso:
         return None
 
     logger.info(
-        "Ejecutando proceso ODS | grupo=%s id=%s nombre=%s",
+        "Ejecutando proceso BDS | grupo=%s id=%s nombre=%s sp=%s",
         nombre_grupo,
         proceso["ID_PROCESO"],
         proceso["NOMBRE_PROCESO"],
+        proceso["STORED_PROCEDURE"],
     )
-    return ejecutar_proceso(proceso, auditoria, spark_cfg, airflow_ctx)
+    return ejecutar_proceso(proceso, auditoria, airflow_ctx)
 
 
 def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -476,7 +532,7 @@ def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
                 procesos_activos.append(proceso_cfg)
             else:
                 logger.info(
-                    "Proceso ODS omitido por configuracion: grupo=%s id=%s nombre=%s activo=%s",
+                    "Proceso BDS omitido por configuracion: grupo=%s id=%s nombre=%s activo=%s",
                     nombre_grupo,
                     proceso_cfg.get("ID_PROCESO"),
                     proceso_cfg.get("NOMBRE_PROCESO"),
@@ -493,21 +549,14 @@ def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def task_id_grupo(nombre: str) -> str:
-    task_id = re.sub(r"[^A-Za-z0-9_.-]+", "_", nombre.lower()).strip("_.-")
+    task_id = TASK_ID_RE.sub("_", nombre.lower()).strip("_.-")
     return f"grupo_{task_id or 'sin_nombre'}"
 
 
 def task_id_proceso(proceso_cfg: dict[str, Any]) -> str:
     nombre = str(proceso_cfg.get("NOMBRE_PROCESO") or "proceso")
-    nombre = re.sub(r"[^A-Za-z0-9_.-]+", "_", nombre.lower()).strip("_.-")
+    nombre = TASK_ID_RE.sub("_", nombre.lower()).strip("_.-")
     return f"p_{int(proceso_cfg['ID_PROCESO'])}_{nombre or 'sin_nombre'}"
-
-
-def timeout_grupo_minutos(grupo_cfg: dict[str, Any]) -> int:
-    procesos = grupo_cfg.get("PROCESOS") or []
-    if not procesos:
-        return 30
-    return max(int(proceso.get("TIMEOUT_MINUTOS", 30)) for proceso in procesos)
 
 
 default_args = {
@@ -520,19 +569,24 @@ default_args = {
 }
 
 
+GRUPOS_PARSE = grupos_ordenados(CONFIG_PARSE)
+validar_dependencias_bds(GRUPOS_PARSE)
+
+
 with DAG(
-    dag_id="ODS_PROCESOS_DATAHUB",
-    description="Orquesta procesos ODS validados contra CTL_CFG_PROCESOS y DAG_ODS_TABLAS",
+    dag_id="BDS_PROCESOS_DATAHUB",
+    description="Orquesta procesos BDS desde ODS usando stored procedures en SingleStore",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    tags=["ODS", "datahub", "singlestore"],
+    tags=["BDS", "ODS", "datahub", "singlestore"],
     default_args=default_args,
 ) as dag:
-    grupo_anterior = None
+    tareas_por_id = {}
+    tareas_con_dependencias = set()
 
-    for grupo_cfg in grupos_ordenados(CONFIG_PARSE):
+    for grupo_cfg in GRUPOS_PARSE:
         nombre = grupo_cfg["NOMBRE"]
         procesos = sorted(
             grupo_cfg.get("PROCESOS", []),
@@ -555,11 +609,25 @@ with DAG(
                         minutes=max(int(proceso_cfg.get("TIMEOUT_MINUTOS", 30)), 1)
                     ),
                 )
+                tareas_por_id[int(proceso_cfg["ID_PROCESO"])] = task
+                if dependencias_proceso(proceso_cfg):
+                    tareas_con_dependencias.add(int(proceso_cfg["ID_PROCESO"]))
 
-                if not grupo_cfg.get("PARALELO", False) and tarea_anterior:
+                if (
+                    not grupo_cfg.get("PARALELO", False)
+                    and tarea_anterior
+                    and int(proceso_cfg["ID_PROCESO"]) not in tareas_con_dependencias
+                ):
                     tarea_anterior >> task
                 tarea_anterior = task
 
-        if grupo_anterior:
-            grupo_anterior >> grupo_task
-        grupo_anterior = grupo_task
+    for grupo_cfg in GRUPOS_PARSE:
+        for proceso_cfg in grupo_cfg.get("PROCESOS", []):
+            proceso_id = int(proceso_cfg["ID_PROCESO"])
+            for dependencia_id in dependencias_proceso(proceso_cfg):
+                if dependencia_id not in tareas_por_id:
+                    raise AirflowException(
+                        f"ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
+                        f"pero la dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
+                    )
+                tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]
