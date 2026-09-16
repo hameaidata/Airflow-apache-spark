@@ -630,4 +630,8 @@ with DAG(
                         f"ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
                         f"pero la dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
                     )
+<<<<<<< HEAD
                 tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]
+=======
+                tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]
+>>>>>>> f5bf0dba400d07a1260b49ac053c79a744d8ad46

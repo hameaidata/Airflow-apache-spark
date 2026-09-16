@@ -319,4 +319,8 @@ with DAG(
     if bds_tasks:
         bds_tasks >> fin
     else:
+<<<<<<< HEAD
         ods_completo >> fin
+=======
+        ods_completo >> fin
+>>>>>>> f5bf0dba400d07a1260b49ac053c79a744d8ad46
