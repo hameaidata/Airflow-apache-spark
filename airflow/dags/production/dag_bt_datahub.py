@@ -186,6 +186,7 @@ def crear_tareas_capa_secuencial(
 
     for grupo_cfg in grupos:
         nombre = grupo_cfg["NOMBRE"]
+        logger.info(f"Mostrando el nombre del grupo {nombre}")
         procesos = sorted(
             grupo_cfg.get("PROCESOS", []),
             key=lambda item: int(item.get("ID_PROCESO", 0)),
@@ -255,6 +256,7 @@ with DAG(
 ) as dag:
     inicio = EmptyOperator(task_id="inicio")
     ods_completo = EmptyOperator(task_id="ods_completo")
+    bds_completo = EmptyOperator(task_id="bds_completo")
     fin = EmptyOperator(task_id="fin")
 
     primeras_ods, ultimos_ods = crear_tareas_capa_secuencial(
@@ -317,10 +319,8 @@ with DAG(
                 ods_completo >> tareas_bds_por_id[proceso_id]
 
     if bds_tasks:
+        for task in bds_tasks:
+            task >> bds_completo
         bds_tasks >> fin
     else:
-<<<<<<< HEAD
         ods_completo >> fin
-=======
-        ods_completo >> fin
->>>>>>> f5bf0dba400d07a1260b49ac053c79a744d8ad46

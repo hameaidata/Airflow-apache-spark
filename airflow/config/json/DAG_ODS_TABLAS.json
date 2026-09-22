@@ -1,0 +1,272 @@
+{
+  "CAPA": "ODS",
+  "AMBIENTE": "PRD",
+  "EJECUCION": {
+    "MODO": "NORMAL",
+    "RUN_ID": "{{ run_id }}",
+    "FECHA_PROCESO": "{{ ds }}"
+  },
+  "GRUPOS": [
+    {
+      "NOMBRE": "ODS_DATAHUB_ORDEN_1",
+      "ORDEN": 1,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 101,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_CALENDARIOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FST028",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_CALENDARIOS",
+          "STORED_PROCEDURE": "SP_ODS_CALENDARIOS",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 102,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_PARAMETROS_CIERRE",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FST017",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_PARAMETROS_CIERRE",
+          "STORED_PROCEDURE": "SP_ODS_PARAMETROS_CIERRE",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 104,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_TIPO_CAMBIO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "S",
+          "TABLA_ORIGEN": "STG_FSH005",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_TIPO_CAMBIO",
+          "STORED_PROCEDURE": "SP_ODS_TIPO_CAMBIO",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 105,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_RUBRO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSD014",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_RUBRO",
+          "STORED_PROCEDURE": "SP_ODS_RUBRO",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 105,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_MODULO_RUBRO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSD013",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_MODULO_RUBRO",
+          "STORED_PROCEDURE": "SP_ODS_MODULO_RUBRO",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 106,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_CUENTA",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSD008",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_CUENTA",
+          "STORED_PROCEDURE": "SP_ODS_CUENTA",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        }
+      ]
+    },
+    {
+      "NOMBRE": "ODS_DATAHUB_ORDEN_2",
+      "ORDEN": 2,
+      "PARALELO": true,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 201,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_PATRIMONIO_EJECUTIVO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FBC206",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_PATRIMONIO_EJECUTIVO",
+          "STORED_PROCEDURE": "SP_ODS_PATRIMONIO_EJECUTIVO",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 202,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_EJECUTIVOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FBC206",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_EJECUTIVOS",
+          "STORED_PROCEDURE": "SP_ODS_EJECUTIVOS",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 203,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_SEGMENTOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FBC206",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_SEGMENTOS",
+          "STORED_PROCEDURE": "SP_ODS_SEGMENTOS",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 204,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_MODULO_PRODUCTO",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FBC206",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_MODULO_PRODUCTO",
+          "STORED_PROCEDURE": "SP_ODS_MODULO_PRODUCTO",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        }
+      ]
+    },
+    {
+      "NOMBRE": "ODS_DATAHUB_ORDEN_3",
+      "ORDEN": 3,
+      "PARALELO": false,
+      "PROCESOS": [
+        {
+          "ID_PROCESO": 301,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSH031",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "STORED_PROCEDURE": "SP_ODS_SALDOS_DIARIOS_CONSOLIDADOS",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_SALDOS_DIARIOS_CONSOLIDADOS"
+          ],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 302,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_HM_SALDOS_CONTABLES",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSH012",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_HM_SALDOS_CONTABLES",
+          "STORED_PROCEDURE": "SP_ODS_HM_SALDOS_CONTABLES",
+          "PARAMETROS": [],
+          "PRE_SQL": [
+            "SELECT 1"
+          ],
+          "POST_SQL": [
+            "ANALYZE TABLE DATAHUB.ODS_HM_SALDOS_CONTABLES"
+          ],
+          "TIMEOUT_MINUTOS": 30,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        },
+        {
+          "ID_PROCESO": 303,
+          "NOMBRE_PROCESO": "CARGA_STG_ODS_OPERACIONES",
+          "TIPO_PROCESO": "SP",
+          "SCHEMA_ORIGEN": "DATAHUB",
+          "ACTIVO": "N",
+          "TABLA_ORIGEN": "STG_FSD010",
+          "SCHEMA_DESTINO": "DATAHUB",
+          "TABLA_DESTINO": "ODS_OPERACIONES",
+          "STORED_PROCEDURE": "SP_ODS_OPERACIONES",
+          "PARAMETROS": [],
+          "PRE_SQL": [],
+          "POST_SQL": [],
+          "TIMEOUT_MINUTOS": 20,
+          "REINTENTOS": 2,
+          "VALIDAR_CFG": true
+        }
+      ]
+    }
+  ],
+  "AUDITORIA": {
+    "REGISTRAR_LOG": true,
+    "TABLA_LOG": "CONTROL_EJECUCIONES_SP",
+    "REGISTRAR_REGISTROS_PROCESADOS": true,
+    "REGISTRAR_DURACION": true,
+    "REGISTRAR_ERROR": true
+  },
+  "SPARK": {
+    "HABILITADO": false,
+    "CORES": 4,
+    "EXECUTORES": 2,
+    "MEMORY_GB": 8
+  }
+}

@@ -28,7 +28,7 @@ TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 DEFAULT_AUDITORIA: dict[str, Any] = {
     "REGISTRAR_LOG": True,
-    "TABLA_LOG": "CONTROL_EJECUCIONES",
+    "TABLA_LOG": "CONTROL_EJECUCIONES_SP",
     "REGISTRAR_DURACION": True,
     "REGISTRAR_ERROR": True,
 }
@@ -572,7 +572,7 @@ default_args = {
 GRUPOS_PARSE = grupos_ordenados(CONFIG_PARSE)
 validar_dependencias_bds(GRUPOS_PARSE)
 
-
+"""
 with DAG(
     dag_id="BDS_PROCESOS_DATAHUB",
     description="Orquesta procesos BDS desde ODS usando stored procedures en SingleStore",
@@ -630,8 +630,6 @@ with DAG(
                         f"ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
                         f"pero la dependencia no existe o esta inactiva en {VARIABLE_CONFIG}."
                     )
-<<<<<<< HEAD
                 tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]
-=======
-                tareas_por_id[dependencia_id] >> tareas_por_id[proceso_id]
->>>>>>> f5bf0dba400d07a1260b49ac053c79a744d8ad46
+
+"""

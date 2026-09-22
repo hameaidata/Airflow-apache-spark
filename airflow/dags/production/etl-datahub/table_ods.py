@@ -34,7 +34,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "GRUPOS": [],
     "AUDITORIA": {
         "REGISTRAR_LOG": True,
-        "TABLA_LOG": "CONTROL_EJECUCIONES",
+        "TABLA_LOG": "CONTROL_EJECUCIONES_SP",
         "REGISTRAR_REGISTROS_PROCESADOS": True,
         "REGISTRAR_DURACION": True,
         "REGISTRAR_ERROR": True,
@@ -130,6 +130,7 @@ def nombre_sp(proceso: dict[str, Any]) -> str:
     if schema:
         return f"{validar_identificador(schema, 'SCHEMA_DESTINO')}.{sp}"
     return sp
+
 
 
 def render_valor(valor: Any, context: dict[str, Any]) -> Any:
@@ -341,8 +342,7 @@ def validar_y_enriquecer(
     proceso_json: dict[str, Any],
     proceso_db: dict[str, Any] | None,
     config: dict[str, Any],
-    nombre_grupo: str,
-) -> dict[str, Any] | None:
+    nombre_grupo: str,) -> dict[str, Any] | None:
     validar_cfg = proceso_json.get("VALIDAR_CFG", True)
 
     if proceso_db is None:
@@ -384,8 +384,7 @@ def ejecutar_proceso(
     proceso: dict[str, Any],
     auditoria: dict[str, Any],
     spark_cfg: dict[str, Any],
-    airflow_ctx: dict[str, str],
-) -> dict[str, Any]:
+    airflow_ctx: dict[str, str],) -> dict[str, Any]:
     tipo = str(proceso.get("TIPO_PROCESO", "SP")).upper()
     usar_spark = tipo == "SPARK" or proceso.get("USAR_SPARK") is True
     logger.info(f"Mostrando la ejecucion de procesos{proceso} ")
@@ -407,8 +406,7 @@ def ejecutar_proceso(
 def buscar_proceso_json(
     config: dict[str, Any],
     nombre_grupo: str,
-    id_proceso: int,
-) -> dict[str, Any]:
+    id_proceso: int,) -> dict[str, Any]:
     for proceso in procesos_json_por_grupo(config, nombre_grupo):
         if int(proceso["ID_PROCESO"]) == int(id_proceso):
             return proceso
@@ -519,7 +517,7 @@ default_args = {
     "retry_delay": timedelta(minutes=5),
 }
 
-
+"""
 with DAG(
     dag_id="ODS_PROCESOS_DATAHUB",
     description="Orquesta procesos ODS validados contra CTL_CFG_PROCESOS y DAG_ODS_TABLAS",
@@ -563,3 +561,4 @@ with DAG(
         if grupo_anterior:
             grupo_anterior >> grupo_task
         grupo_anterior = grupo_task
+"""

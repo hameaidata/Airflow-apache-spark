@@ -45,30 +45,16 @@ BATCH_ID_GLOBAL = None
 # ===================================================
 # VARIABLES AIRFLOW
 # ===================================================
-variables_config = {}
-MAX_WORKERS = 1
-CHUNK_SIZE = 10000
-OUTPUT_DIR = ""
-SQL_FECHA_PROCESO = ""
-PROCESOS = []
-TABLA_AUDITORIA_PARQUET = ""
-SQL_PARAMETROS_PARQUET = ""
+variables_config = Variable.get("EXTRACCION_BT_STG",deserialize_json=True)
+MAX_WORKERS = variables_config["max_worker"]
+CHUNK_SIZE= variables_config["chunk_size"]
+OUTPUT_DIR= variables_config["output_dir"]
+SQL_FECHA_PROCESO= variables_config["sql_fecha"]
+PROCESOS = variables_config["procesos"] #LISTA DE PROCESOS
 
 
-def cargar_variables_config():
-    global variables_config, MAX_WORKERS, CHUNK_SIZE, OUTPUT_DIR
-    global SQL_FECHA_PROCESO, PROCESOS, TABLA_AUDITORIA_PARQUET
-    global SQL_PARAMETROS_PARQUET
-
-    variables_config = Variable.get("EXTRACCION_BT_STG", deserialize_json=True)
-    MAX_WORKERS = int(variables_config["max_worker"])
-    CHUNK_SIZE = int(variables_config["chunk_size"])
-    OUTPUT_DIR = variables_config["output_dir"]
-    SQL_FECHA_PROCESO = variables_config["sql_fecha"]
-    PROCESOS = variables_config["procesos"]
-    TABLA_AUDITORIA_PARQUET = variables_config["tb_proceso_parquet"]
-    SQL_PARAMETROS_PARQUET = variables_config["sql_parametros_parquet"]
-    return variables_config
+TABLA_AUDITORIA_PARQUET = variables_config["tb_proceso_parquet"]
+SQL_PARAMETROS_PARQUET = variables_config["sql_parametros_parquet"]
 default_args = {
     "owner": "data-engineering",
     "depends_on_past": False,
@@ -136,25 +122,25 @@ def obtener_conexion_singlestore():
 
 
 def obtener_conexion_bt():
-    conn_airflow = BaseHook.get_connection(
+    conn_bt = BaseHook.get_connection(
         BT_CONN_ID
     )
-    logger.info(f"Estableciendo conexion con BT {conn_airflow.host}, {conn_airflow.port}")
-    try:
-        conn_str = (
-            f"DATABASE={conn_airflow.schema};"
-            f"HOSTNAME={conn_airflow.host};"
-            f"PORT={conn_airflow.port};"
+    logger.info(f"Estableciendo conexion con BT {conn_bt.host}, {conn_bt.port}")
+    try: 
+        conn_bt =(
+            f"DATABASE={conn_bt.schema};"
+            f"HOSTNAME={conn_bt.host};"
+            f"PORT={conn_bt.port};"
             "PROTOCOL=TCPIP;"
             "CONNECTTIMEOUT=10;"
-            f"UID={conn_airflow.login};"
-            f"PWD={conn_airflow.password};"
+            f"UID={conn_bt.login};"
+            f"PWD={conn.password};"
         )
-
-        connection = ibm_db.connect(conn_str, "", "")
+        
+        connection = ibm_db.connect(conn_str,"","")
         return connection
     except Exception as e:
-        logger.exception("[Error] Obtencion conexion BT")
+        Exception(f"{e}")
         raise
 
 def gestionar_control_proceso(
@@ -288,8 +274,7 @@ def apply_dtype_rules(chunk, dtype_map, tabla):
 def procesar_tabla_incremental(row):
 
     tabla, archivo = row["TABLA"], row["NOMBRE_PARQUET"]
-    conn_bt = conn_log = conn_s2 = writer = None
-    cur_log = None
+    conn_bt = conn_log = writer = None
     id_log, total = None, 0
     inicio = time.time()
 
@@ -310,10 +295,11 @@ def procesar_tabla_incremental(row):
         if row["FILTRO"]:
             query += f" WHERE {row['FILTRO']}"
 
-        output_path = os.path.join(OUTPUT_DIR, archivo)
-        output_dirname = os.path.dirname(output_path)
-        if output_dirname:
-            os.makedirs(output_dirname, exist_ok=True)
+        
+        fecha_proceso = datetime.now().strftime("%Y%m%d")
+        directorio_salida = os.path.join(OUTPUT_DIR,fecha_proceso)
+        os.makedirs(directorio_salida, exist_ok=True)
+        output_path = os.path.join(directorio_salida, archivo)
 
         # for chunk in pd.read_sql(query, conn_bt, chunksize=CHUNK_SIZE): -- 1
         for chunk in pd.read_sql(query, conn_s2, chunksize=CHUNK_SIZE):
@@ -353,76 +339,58 @@ def procesar_tabla_incremental(row):
                 mensaje_error=str(e)
             )
 
-        raise
+        return f"ERROR -> {tabla}: {str(e)}"
 
     finally:
 
         if writer:
             writer.close()
 
-        if cur_log:
-            cur_log.close()
-
         if conn_bt:
             conn_bt.close()
-
-        if conn_s2:
-            conn_s2.close()
 
         if conn_log:
             conn_log.close()
 
 def filtrar_procesos(param_df, procesos, tipo_ejecucion="diario"):
-
-    # Crear lookup de procesos
-    procesos_dict = { p["nombre_proceso"]: p for p in procesos }
+    procesos_dict = {p["nombre_proceso"]: p for p in procesos}
+    estado_ejecucion = {"diario":"estado_diario","semanal":"estado_semanal","mensual":"estado_mensual"}
+    flag_ejecucion =  estado_ejecucion.get(tipo_ejecucion)
+    if flag_ejecucion is None:
+        raise ValueError(f"Tipo de ejecucion no soportada: {tipo_ejecucion}")
     procesos_validos = []
     for _, row in param_df.iterrows():
-        print("Mostrando el contenido del row")
-        print(row)
-        # Validar ACTIVO
-        if row["ACTIVO"] != "S":
+        nombre_proceso =  row["TABLA"]
+        proc =  procesos_dict.get(nombre_proceso)
+        if proc  is None:
+            logger.warning("Proceso [%s] no encontrado en configuracion JSON",nombre_proceso)
             continue
-        nombre_proceso = row["TABLA"].replace(".parquet", "")
-
-        # Validar existencia en configuración JSON
-        if nombre_proceso not in procesos_dict: 
-            logger.warning( f"Proceso {nombre_proceso} no existe en configuración")
+        #Proceso activo en tabla
+        if row["ACTIVO"] !="S":
+            logger.info("Procesos[%%s] descartado ACTIVO!='S' en tabla", nombre_proceso )
             continue
-        proc = procesos_dict[nombre_proceso]
-        # Validar tipo de ejecución
-        ejecutar = False
-        if tipo_ejecucion == "diario":
-            ejecutar = proc.get("estado_diario", 0) == 1
-        elif tipo_ejecucion == "semanal":
-            ejecutar = proc.get("estado_semanal", 0) == 1
-        elif tipo_ejecucion == "mensual":
-            ejecutar = proc.get("estado_mensual", 0) == 1
-        if not ejecutar:
+        # Activo en variable airflow
+        if proc.get("estado",0) !=1:
+            logger.info("Proceso[%s] descartado estado=0 en JSON", nombre_proceso)
             continue
-        # Combinar información de tabla + json
-        procesos_validos.append({ "row": row, "prioridad": proc["prioridad"],  "nombre_proceso": proc["nombre_proceso"]})
+        # Activo para la frecuencia de ejecucion
+        if proc.get(flag_ejecucion, 0) !=1:
+            logger.info("Proceso [%s] descartado .%s=0", nombre_proceso, flag_ejecucion)
+            continue
+        procesos_validos.append({"row": row, "prioridad": proc.get("prioridad",2),"nombre_proceso":nombre_proceso})
+        logger.info("Proceso [%s] habilitado para ejecucion . ", nombre_proceso)
+        prioridad_1 =  [p["row"] for p in procesos_validos if p["prioridad"]==1]
+        prioridad_2 =  [p["row"] for p in procesos_validos if p["prioridad"]==2]
 
-    prioridad_1 = [ p["row"] for p in procesos_validos if p["prioridad"] == 1 ]
-    prioridad_2 = [ p["row"] for p in procesos_validos if p["prioridad"] == 2 ]
-    return prioridad_1, prioridad_2
-
+        return prioridad_1, prioridad_2
 
 def ejecutar_extraccion():
-    global FECHA_PROCESO_GLOBAL, BATCH_ID_GLOBAL
-
     start_time = time.time()
-    cargar_variables_config()
     FECHA_PROCESO_GLOBAL = FechaProceso().fecha_proceso
     BATCH_ID_GLOBAL = datetime.now().strftime("%Y%m%d%H%M%S")
     validar_conectividad()
-    conn_s2 = None
-    try:
-        conn_s2 = obtener_conexion_singlestore()
-        param_df = pd.read_sql(SQL_PARAMETROS_PARQUET, conn_s2)
-    finally:
-        if conn_s2:
-            conn_s2.close()
+    conn_s2 = obtener_conexion_singlestore()
+    param_df = pd.read_sql(SQL_PARAMETROS_PARQUET, conn_s2)
 
     prioridad_1, prioridad_2 = filtrar_procesos(
         param_df,
@@ -434,31 +402,15 @@ def ejecutar_extraccion():
     logger.info(f"Prioridad 2: {len(prioridad_2)}")
 
 
-    errores = []
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [ executor.submit(procesar_tabla_incremental, row) for row in prioridad_1 ]
 
-    def ejecutar_lote(nombre_lote, filas):
-        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            futures = {
-                executor.submit(procesar_tabla_incremental, row): row
-                for row in filas
-            }
+        for future in futures:
+            future.result()
 
-            for future in as_completed(futures):
-                row = futures[future]
-                try:
-                    logger.info(future.result())
-                except Exception as exc:
-                    tabla = row.get("TABLA", "?")
-                    errores.append(f"{nombre_lote}:{tabla}: {exc}")
-
-    ejecutar_lote("prioridad_1", prioridad_1)
-    ejecutar_lote("prioridad_2", prioridad_2)
-
-    duracion = round(time.time() - start_time, 2)
-    logger.info("Extraccion finalizada en %.2f segundos", duracion)
-
-    if errores:
-        raise Exception("Fallaron procesos de extraccion: " + " | ".join(errores))
+        futures = [executor.submit(procesar_tabla_incremental, row) for row in prioridad_2]
+        for future in futures:
+            future.result()
 
 """with DAG(
     dag_id = "Extraer_datos_bt",

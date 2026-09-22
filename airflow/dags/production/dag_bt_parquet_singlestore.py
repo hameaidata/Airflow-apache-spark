@@ -4,6 +4,9 @@ import os
 import sys
 from datetime import datetime, timedelta
 from airflow.operators.python import PythonOperator
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.sensors.external_task import ExternalTaskSensor
 
 
 
@@ -41,6 +44,10 @@ with DAG(
         "produccion"
     ]
 ) as dag:
+    inicio = EmptyOperator(task_id="inicio")
+    extraccion_completa = EmptyOperator(task_id="extraccion_completa")
+    carga_completa = EmptyOperator(task_id="carga_completa")
+    fin = EmptyOperator(task_id = "fin")
 
     t1 = PythonOperator(
         task_id="extraer_parquet",
@@ -52,4 +59,5 @@ with DAG(
         python_callable=ejecutar_carga
     )
 
-    t1 >> t2
+    inicio >> t1 >> extraccion_completa
+    extraccion_completa >> t2 >> carga_completa >> fin
