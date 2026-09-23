@@ -190,7 +190,7 @@ def obtener_conexion_bt():
         raise
 
 def gestionar_control_proceso(
-    conn, cur, accion, id_log=None, tabla_origen=None,
+    conn, cur, accion, id_log=None, tabla_origen=None, esquema_origen=None,
     ruta=None, host_name=None, estado=None,
     mensaje_error=None, total_rows=None, total_time=None,
     batch_id=None, fecha_proceso=None
@@ -206,10 +206,10 @@ def gestionar_control_proceso(
         cur.execute(
             f"""INSERT INTO {TABLA_AUDITORIA_PARQUET}
             (nom_proceso,tabla_origen,archivo_parquet,batch_id,fecha_proceso,
-             fec_inicio,estado,host_name)
-            VALUES (%s,%s,%s,%s,%s,NOW(6),%s,%s)""",
+             fec_inicio,estado,host_name,esquema)
+            VALUES (%s,%s,%s,%s,%s,NOW(6),%s,%s,%s)""",
             (NOM_PROCESO, tabla_origen, ruta, batch_id, fecha_proceso,
-             ESTADO_INICIADO, host_name)
+             ESTADO_INICIADO, host_name, esquema_origen)
         )
         conn.commit()
         return cur.lastrowid
@@ -345,6 +345,8 @@ def carpeta_del_dia() -> str:
     del parquet decia otra cosa.
     """
     fecha = FECHA_PROCESO_GLOBAL
+    if isinstance(fecha, bytes):
+        fecha = fecha.decode("utf-8")
     if hasattr(fecha, "strftime"):
         sufijo = fecha.strftime("%Y%m%d")
     else:
@@ -360,7 +362,7 @@ def carpeta_del_dia() -> str:
 
 def procesar_tabla_incremental(row):
 
-    tabla, archivo = row["TABLA"], row["NOMBRE_PARQUET"]
+    tabla, archivo, esquema = row["TABLA"], row["NOMBRE_PARQUET"], row["ESQUEMA"]
     conn_bt = conn_s2 = conn_log = writer = None
     cur_log = None
     id_log, total = None, 0
@@ -382,6 +384,7 @@ def procesar_tabla_incremental(row):
         id_log = gestionar_control_proceso(
             conn=conn_log, cur=cur_log, accion="INICIO",
             tabla_origen=tabla,
+            esquema_origen=esquema,
             ruta=output_path,
             host_name=socket.gethostname(),
             batch_id=BATCH_ID_GLOBAL,
@@ -469,17 +472,20 @@ def procesar_tabla_incremental(row):
             conn_log.close()
 
 def filtrar_procesos(param_df, procesos, tipo_ejecucion="diario"):
-    procesos_dict = {p["nombre_proceso"]: p for p in procesos}
+    procesos_dict = { (p["nombre_proceso"], p["nombre_esquema"]): p for p in procesos}
     estado_ejecucion = {"diario":"estado_diario","semanal":"estado_semanal","mensual":"estado_mensual"}
     flag_ejecucion =  estado_ejecucion.get(tipo_ejecucion)
     if flag_ejecucion is None:
         raise ValueError(f"Tipo de ejecucion no soportada: {tipo_ejecucion}")
     procesos_validos = []
     for _, row in param_df.iterrows():
-        nombre_proceso =  row["TABLA"]
-        proc =  procesos_dict.get(nombre_proceso)
+        nombre_proceso = row["TABLA"]
+        nombre_esquema = row["ESQUEMA"]
+
+        proc = procesos_dict.get((nombre_proceso, nombre_esquema))
+                
         if proc  is None:
-            logger.warning("Proceso [%s] no encontrado en configuracion JSON",nombre_proceso)
+            logger.warning("Proceso [%s] esquema [%s] no encontrado en configuracion JSON",nombre_proceso, nombre_esquema)
             continue
         #Proceso activo en tabla
         if row["ACTIVO"] !="S":

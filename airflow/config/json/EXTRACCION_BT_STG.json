@@ -4,12 +4,13 @@
   "output_dir": "/data/parquet",
   "retencion_dias": 7,
   "sql_fecha": "SELECT STR_TO_DATE(PGFCIE, '%Y%m%d') AS FECHA_PROCESO FROM STG_FST017 LIMIT 1",
-  "tb_proceso_parquet": "CTL_PROCESO_PARQUET",
+  "tb_proceso_parquet": "ctl_proceso_parquet",
   "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
   "error_size_limit": 4000,
   "procesos": [
     {
       "nombre_proceso": "STG_FSH005",
+      "nombre_esquema": "DATAHUB",
       "estado": 1,
       "prioridad": 1,
       "estado_diario": 1,
@@ -18,6 +19,7 @@
     },
     {
       "nombre_proceso": "STG_MSFD008",
+      "nombre_esquema": "DATAHUB",
       "estado": 1,
       "prioridad": 1,
       "estado_diario": 1,
@@ -26,6 +28,7 @@
     },
     {
       "nombre_proceso": "STG_FSH031",
+      "nombre_esquema": "DATAHUB",
       "estado": 1,
       "prioridad": 1,
       "estado_diario": 1,
@@ -34,6 +37,7 @@
     },
     {
       "nombre_proceso": "STG_FSH012",
+      "nombre_esquema": "DATAHUB",
       "estado": 1,
       "prioridad": 1,
       "estado_diario": 1,

@@ -38,10 +38,9 @@ COLUMNAS_CFG_PROCESOS = (
     "NOMBRE_PROCESO",
     "TIPO_PROCESO",
     "STORED_PROCEDURE",
-    "SCHEMA_SP",
+    "SCHEMA_DESTINO",
     "SCHEMA_ORIGEN",
     "TABLA_ORIGEN",
-    "SCHEMA_DESTINO",
     "TABLA_DESTINO",
     "ACTIVO",
 )
@@ -155,7 +154,7 @@ def nombre_sp(proceso: dict[str, Any]) -> str:
     if "." in sp:
         return sp
 
-    schema = proceso.get("SCHEMA_DESTINO") or proceso.get("SCHEMA_SP")
+    schema = proceso.get("SCHEMA_DESTINO") or proceso.get("SCHEMA_DESTINO")
     if schema:
         return f"{validar_identificador(str(schema), 'SCHEMA_DESTINO')}.{sp}"
     return sp

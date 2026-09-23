@@ -1,7 +1,7 @@
 {
   "nom_proceso": "PY_CARGA_PARQUET_STG",
-  "tabla_control": "CTL_CARGA_STG",
-  "sql_jobs": "SELECT p.archivo_parquet, e.tabla_destino, e.batch_size, e.commit_every FROM CTL_PROCESO_PARQUET p JOIN ETL_CONFIG e ON e.tabla_origen = p.tabla_origen AND e.activo = 1 WHERE p.estado = 'TERMINADO' AND p.batch_id = {BATCH_ID} ORDER BY e.orden, p.tabla_origen",
+  "tabla_control": "ctl_carga_stg",
+  "sql_jobs": "SELECT p.archivo_parquet, e.tabla_destino, e.batch_size, p.commit_every FROM ctl_proceso_parquet p JOIN CTL_PARAMETROS_PARQUET e ON p.tabla_origen = e.TABLA AND e.ESQUEMA= p.esquema AND e.ACTIVO = 'S' WHERE p.estado = 'TERMINADO' AND p.batch_id = {BATCH_ID} ORDER BY p.id_log, e.TABLA",
   "estado_iniciado": "INICIADO",
   "estado_ejecutado": "EJECUTADO",
   "estado_finalizado": "FINALIZADO",
@@ -11,5 +11,5 @@
   "batch_default": 5000,
   "usar_staging": false,
   "sufijo_staging": "_STG",
-  "tabla_control_extraccion": "CTL_PROCESO_PARQUET"
+  "tabla_control_extraccion": "ctl_proceso_parquet"
 }
