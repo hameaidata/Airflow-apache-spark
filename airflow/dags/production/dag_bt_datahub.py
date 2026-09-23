@@ -1,10 +1,54 @@
+"""
+BT_DATAHUB - Orquesta la capa ODS y luego la capa BDS en un solo DAG.
+
+Configuracion (Variables de Airflow, versionadas en airflow/config/json/):
+    DAG_ODS_TABLAS   grupos y procesos de la capa ODS
+    DAG_BDS_TABLAS   grupos y procesos de la capa BDS
+
+La logica de ejecucion vive en etl-datahub/table_ods.py y table_bds.py; este
+archivo solo arma el grafo.
+
+COMO SE ARMA EL GRAFO
+---------------------
+ODS
+    Los grupos se ordenan por ORDEN.
+      - ORDEN distinto -> los grupos corren uno despues de otro.
+      - ORDEN igual     -> los grupos corren en paralelo entre si.
+    Dentro del grupo, PARALELO decide:
+      - false -> los procesos corren en cadena, por ID_PROCESO
+      - true  -> los procesos arrancan todos a la vez
+    Al terminar todos los grupos se completa la tarea "ods_completo".
+
+BDS
+    ORDEN TAMBIEN ORDENA (cambio respecto de la version anterior, donde ORDEN
+    en BDS era decorativo y todo grupo sin DEPENDE_DE arrancaba junto con la
+    capa entera). Ahora:
+      - Un proceso SIN DEPENDE_DE espera a que termine el nivel de ORDEN
+        anterior; si esta en el primer nivel, espera ods_completo.
+      - Un proceso CON DEPENDE_DE espera exactamente a esos ID_PROCESO,
+        sin importar en que grupo o nivel esten.
+    Asi el JSON y el grafo dicen lo mismo.
+
+VALIDACION
+----------
+Todo se valida ANTES de crear tareas y se reportan TODOS los errores juntos,
+no solo el primero: IDs duplicados (dentro de la capa y entre capas), grupos
+que generan el mismo group_id, dependencias hacia procesos inexistentes o
+inactivos, y ciclos.
+"""
+
 from __future__ import annotations
 
 import importlib.util
 import logging
 import re
+import sys
+from collections import defaultdict
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from airflow import DAG
 from airflow.exceptions import AirflowException
@@ -12,32 +56,57 @@ from airflow.models import Variable
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
-from datetime import datetime, timedelta
 
 
 logger = logging.getLogger(__name__)
 
+DAG_ID = "BT_DATAHUB"
+
 VARIABLE_ODS = "DAG_ODS_TABLAS"
 VARIABLE_BDS = "DAG_BDS_TABLAS"
+VARIABLE_POR_CAPA = {"ODS": VARIABLE_ODS, "BDS": VARIABLE_BDS}
 
 BASE_DIR = Path(__file__).resolve().parent
 DATAHUB_DIR = BASE_DIR / "etl-datahub"
-TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+
+# Pool de Airflow que limita cuantas tareas golpean SingleStore a la vez.
+# Sin esto, un grupo con PARALELO=true y 20 procesos abre 20 conexiones de
+# golpe. Se puede sobreescribir por proceso o por grupo con la clave POOL.
+# El pool debe existir en Airflow (Admin > Pools); si no existe, las tareas
+# quedan en estado "scheduled" sin explicacion, por eso se puede desactivar
+# poniendo POOL: null en el JSON.
+POOL_DEFAULT = "singlestore"
+
+# Airflow valida task_id y group_id con reglas distintas:
+#     task_id  -> ^[\w.-]+$   admite punto
+#     group_id -> ^[\w-]+$    NO admite punto (el punto separa la jerarquia)
+# Se usa la regla mas estricta para ambos.
+ID_AIRFLOW_RE = re.compile(r"[^A-Za-z0-9_-]+")
+PREFIJOS_REDUNDANTES = ("grupo_", "grp_", "g_")
 
 DEFAULT_CONFIG_ODS: dict[str, Any] = {"CAPA": "ODS", "GRUPOS": []}
 DEFAULT_CONFIG_BDS: dict[str, Any] = {"CAPA": "BDS", "GRUPOS": []}
 
 
+# ============================================================================
+# CONFIGURACION
+# ============================================================================
 def cargar_config(variable: str, default: dict[str, Any]) -> dict[str, Any]:
+    """Lee la Variable en tiempo de parseo.
+
+    Nunca lanza: si la Variable falta o esta mal, devuelve el default vacio y
+    deja el DAG visible pero sin tareas. Un DAG vacio se diagnostica; un
+    archivo que no importa desaparece de la UI sin dejar rastro claro.
+    """
     try:
-        return Variable.get(variable, deserialize_json=True)
+        config = Variable.get(variable, deserialize_json=True)
     except Exception as exc:
-        logger.warning(
-            "No se pudo leer Variable %s durante el parseo de dag_bt_datahub: %s",
-            variable,
-            exc,
-        )
+        logger.warning("No se pudo leer la Variable %s al parsear %s: %s", variable, DAG_ID, exc)
         return default
+    if not isinstance(config, dict):
+        logger.warning("La Variable %s no es un objeto JSON; se ignora.", variable)
+        return default
+    return config
 
 
 def normalizar_estado_activo(valor: Any, campo: str) -> bool:
@@ -63,7 +132,6 @@ def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str, variable: str
                 proceso_cfg[campo],
                 f"{variable}.GRUPOS.{nombre_grupo}.PROCESOS.{proceso_cfg.get('ID_PROCESO')}.{campo}",
             )
-
     raise AirflowException(
         f"El proceso {proceso_cfg.get('ID_PROCESO')!r} / "
         f"{proceso_cfg.get('NOMBRE_PROCESO')!r} del grupo {nombre_grupo!r} "
@@ -73,19 +141,21 @@ def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str, variable: str
 
 def grupos_con_procesos_activos(config: dict[str, Any], variable: str) -> list[dict[str, Any]]:
     grupos = []
-    for grupo_cfg in config.get("GRUPOS", []):
+    for grupo_cfg in config.get("GRUPOS", []) or []:
         nombre_grupo = grupo_cfg.get("NOMBRE", "sin_nombre")
         procesos_activos = [
             proceso_cfg
-            for proceso_cfg in grupo_cfg.get("PROCESOS", [])
+            for proceso_cfg in grupo_cfg.get("PROCESOS", []) or []
             if proceso_activo(proceso_cfg, nombre_grupo, variable)
         ]
         if procesos_activos:
+            procesos_activos = sorted(procesos_activos, key=lambda p: int(p["ID_PROCESO"]))
             grupos.append({**grupo_cfg, "PROCESOS": procesos_activos})
     return sorted(grupos, key=lambda item: int(item.get("ORDEN", 0)))
 
 
 def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
+    """Acepta [], 2001, '2001,2002' o [2001, 2002]."""
     valor = None
     for campo in ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS"):
         if campo in proceso_cfg:
@@ -94,62 +164,96 @@ def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
 
     if valor in (None, "", []):
         return []
-    if isinstance(valor, int):
-        return [valor]
-    if isinstance(valor, str):
-        return [int(item.strip()) for item in valor.split(",") if item.strip()]
-    if isinstance(valor, list):
-        return [int(item) for item in valor]
-
+    try:
+        if isinstance(valor, bool):
+            raise ValueError
+        if isinstance(valor, int):
+            return [valor]
+        if isinstance(valor, str):
+            return [int(item.strip()) for item in valor.split(",") if item.strip()]
+        if isinstance(valor, list):
+            return [int(item) for item in valor]
+    except (TypeError, ValueError):
+        pass
     raise AirflowException(
         f"Dependencias invalidas para ID_PROCESO={proceso_cfg.get('ID_PROCESO')}: {valor!r}"
     )
 
 
-def validar_dependencias_bds(grupos_bds: list[dict[str, Any]]) -> None:
-    procesos = {
-        int(proceso["ID_PROCESO"]): proceso
-        for grupo in grupos_bds
-        for proceso in grupo.get("PROCESOS", [])
-    }
-
-    for proceso_id, proceso in procesos.items():
-        for dependencia_id in dependencias_proceso(proceso):
-            if dependencia_id not in procesos:
-                raise AirflowException(
-                    f"BDS ID_PROCESO={proceso_id} depende de ID_PROCESO={dependencia_id}, "
-                    f"pero esa dependencia no existe o esta inactiva en {VARIABLE_BDS}."
-                )
-
-    visitando: set[int] = set()
-    visitados: set[int] = set()
-
-    def visitar(proceso_id: int, ruta: list[int]) -> None:
-        if proceso_id in visitados:
-            return
-        if proceso_id in visitando:
-            ciclo = " -> ".join(str(item) for item in [*ruta, proceso_id])
-            raise AirflowException(f"Ciclo de dependencias BDS detectado: {ciclo}")
-
-        visitando.add(proceso_id)
-        for dependencia_id in dependencias_proceso(procesos[proceso_id]):
-            visitar(dependencia_id, [*ruta, proceso_id])
-        visitando.remove(proceso_id)
-        visitados.add(proceso_id)
-
-    for proceso_id in procesos:
-        visitar(proceso_id, [])
+# ============================================================================
+# IDENTIFICADORES DE AIRFLOW
+# ============================================================================
+def _slug(texto: Any) -> str:
+    return ID_AIRFLOW_RE.sub("_", str(texto).strip().lower()).strip("_-")
 
 
+def task_id_grupo(capa: str, nombre: str) -> str:
+    """('ODS', 'ODS_DATAHUB_ORDEN_1') -> 'ods_datahub_orden_1'
+
+    Quita el prefijo de capa si el nombre del grupo ya lo trae, para no
+    terminar con group_ids como 'ods_ods_datahub_orden_1'.
+    """
+    slug = _slug(nombre)
+    for prefijo in PREFIJOS_REDUNDANTES:
+        if slug.startswith(prefijo):
+            slug = slug[len(prefijo):]
+            break
+    capa_slug = capa.lower()
+    if slug.startswith(f"{capa_slug}_"):
+        slug = slug[len(capa_slug) + 1:]
+    return f"{capa_slug}_{slug or 'sin_nombre'}"
+
+
+def task_id_proceso(proceso_cfg: dict[str, Any]) -> str:
+    """-> 'p104_carga_stg_ods_tipo_cambio'
+
+    Sin prefijo de capa: el TaskGroup que lo contiene ya lo lleva y Airflow
+    compone el id como '<group_id>.<task_id>'. El ID va con ceros a la
+    izquierda para que el orden alfabetico de la UI coincida con el numerico.
+    """
+    nombre = _slug(proceso_cfg.get("NOMBRE_PROCESO") or "proceso")
+    return f"p{int(proceso_cfg['ID_PROCESO']):03d}_{nombre or 'sin_nombre'}"
+
+
+def pool_de(proceso_cfg: dict[str, Any], grupo_cfg: dict[str, Any]) -> str | None:
+    for origen in (proceso_cfg, grupo_cfg):
+        if "POOL" in origen:
+            valor = origen["POOL"]
+            return str(valor) if valor else None
+    return POOL_DEFAULT
+
+
+# ============================================================================
+# CARGA DE LOS MODULOS DE EJECUCION
+# ============================================================================
+@lru_cache(maxsize=None)
 def importar_modulo(nombre_archivo: str, nombre_modulo: str):
+    """Importa table_ods.py / table_bds.py una sola vez por proceso worker.
+
+    Antes se re-ejecutaba el modulo entero en CADA tarea: re-importaba
+    singlestoredb y volvia a leer la Variable. Con lru_cache se paga una vez.
+
+    El registro en sys.modules ANTES de exec_module no es opcional: sin el,
+    cualquier @dataclass o typing con "from __future__ import annotations"
+    dentro del modulo falla con
+        'NoneType' object has no attribute '__dict__'
+    porque dataclasses busca su propio modulo en sys.modules.
+    """
     ruta = DATAHUB_DIR / nombre_archivo
     if not ruta.exists():
-        raise AirflowException(f"No existe el modulo requerido por BT_DATAHUB: {ruta}")
+        raise AirflowException(f"No existe el modulo requerido por {DAG_ID}: {ruta}")
+
     spec = importlib.util.spec_from_file_location(nombre_modulo, ruta)
     if spec is None or spec.loader is None:
         raise AirflowException(f"No se pudo importar {ruta}")
+
     modulo = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(modulo)
+    sys.modules[nombre_modulo] = modulo
+    try:
+        spec.loader.exec_module(modulo)
+    except Exception as exc:
+        sys.modules.pop(nombre_modulo, None)
+        raise AirflowException(f"Error al importar {ruta}: {exc}") from exc
     return modulo
 
 
@@ -163,76 +267,229 @@ def ejecutar_bds(id_proceso: int, nombre_grupo: str):
     return modulo.ejecutar_proceso_desde_json(id_proceso, nombre_grupo)
 
 
-def task_id_grupo(capa: str, nombre: str) -> str:
-    task_id = TASK_ID_RE.sub("_", str(nombre).lower()).strip("_.-")
-    return f"{capa.lower()}_{task_id or 'sin_nombre'}"
+# ============================================================================
+# PLAN: el grafo como datos, validado antes de crear tareas
+# ============================================================================
+@dataclass
+class Nodo:
+    id_proceso: int
+    capa: str
+    grupo: str
+    orden: int
+    cfg: dict[str, Any]
+    grupo_cfg: dict[str, Any]
 
 
-def task_id_proceso(capa: str, proceso_cfg: dict[str, Any]) -> str:
-    nombre = str(proceso_cfg.get("NOMBRE_PROCESO") or "proceso")
-    nombre = TASK_ID_RE.sub("_", nombre.lower()).strip("_.-")
-    return f"{capa.lower()}_p_{int(proceso_cfg['ID_PROCESO'])}_{nombre or 'sin_nombre'}"
+@dataclass
+class Plan:
+    ods: list[dict[str, Any]] = field(default_factory=list)
+    bds: list[dict[str, Any]] = field(default_factory=list)
+    nodos: dict[int, Nodo] = field(default_factory=dict)
+    # (origen, destino); origen puede ser un ID_PROCESO o "ods_completo".
+    aristas_bds: list[tuple[Any, int]] = field(default_factory=list)
 
 
-def crear_tareas_capa_secuencial(
-    *,
-    grupos: list[dict[str, Any]],
-    capa: str,
-    callable_proceso: Callable,
-) -> tuple[list, list]:
-    primeras_tareas = []
-    ultimos_grupos = []
-    grupo_anterior = None
+def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Plan:
+    plan = Plan(
+        ods=grupos_con_procesos_activos(config_ods, VARIABLE_ODS),
+        bds=grupos_con_procesos_activos(config_bds, VARIABLE_BDS),
+    )
+    errores: list[str] = []
 
-    for grupo_cfg in grupos:
-        nombre = grupo_cfg["NOMBRE"]
-        logger.info(f"Mostrando el nombre del grupo {nombre}")
-        procesos = sorted(
-            grupo_cfg.get("PROCESOS", []),
-            key=lambda item: int(item.get("ID_PROCESO", 0)),
-        )
+    # --- unicidad sobre TODO lo declarado, activo o no ----------------------
+    # ID_PROCESO es la clave de CTL_CFG_PROCESOS, asi que un duplicado es un
+    # conflicto de catalogo aunque los procesos esten apagados: al activarlos,
+    # uno de los dos validaria contra la fila del otro. Lo mismo con los
+    # group_id: dos grupos que colapsan al mismo id rompen el DAG el dia que
+    # ambos tengan procesos activos. Por eso esta pasada NO filtra por ACTIVO.
+    vistos_id: dict[int, str] = {}
+    vistos_gid: dict[str, str] = {}
+    for capa, cfg in (("ODS", config_ods), ("BDS", config_bds)):
+        variable = VARIABLE_POR_CAPA[capa]
+        for g in cfg.get("GRUPOS", []) or []:
+            nombre_grupo = g.get("NOMBRE", "sin_nombre")
+            gid = task_id_grupo(capa, nombre_grupo)
+            if gid in vistos_gid and vistos_gid[gid] != f"{capa}.{nombre_grupo}":
+                errores.append(
+                    f"{variable}: los grupos {vistos_gid[gid]!r} y {capa}.{nombre_grupo!r} "
+                    f"generan el mismo group_id {gid!r}. Renombra uno."
+                )
+            vistos_gid[gid] = f"{capa}.{nombre_grupo}"
 
-        with TaskGroup(group_id=task_id_grupo(capa, nombre), tooltip=f"{capa} - {nombre}") as grupo_task:
-            tarea_anterior = None
-            primera_tarea_grupo = None
+            for p in g.get("PROCESOS", []) or []:
+                pid = int(p["ID_PROCESO"])
+                origen = f"{capa}.{nombre_grupo}"
+                if pid in vistos_id and vistos_id[pid] != origen:
+                    errores.append(
+                        f"{variable}.{nombre_grupo}.ID_PROCESO={pid} repetido, ya declarado en "
+                        f"{vistos_id[pid]}. Debe ser unico entre ODS y BDS porque es la clave "
+                        f"de CTL_CFG_PROCESOS."
+                    )
+                vistos_id[pid] = origen
 
-            for proceso_cfg in procesos:
-                task = PythonOperator(
-                    task_id=task_id_proceso(capa, proceso_cfg),
-                    python_callable=callable_proceso,
-                    op_kwargs={
-                        "id_proceso": int(proceso_cfg["ID_PROCESO"]),
-                        "nombre_grupo": nombre,
-                    },
-                    retries=int(proceso_cfg.get("REINTENTOS", grupo_cfg.get("REINTENTOS", 0))),
-                    execution_timeout=timedelta(
-                        minutes=max(int(proceso_cfg.get("TIMEOUT_MINUTOS", 30)), 1)
-                    ),
+    # --- nodos del grafo (solo los activos) --------------------------------
+    for capa, grupos in (("ODS", plan.ods), ("BDS", plan.bds)):
+        variable = VARIABLE_POR_CAPA[capa]
+        for g in grupos:
+            for p in g["PROCESOS"]:
+                pid = int(p["ID_PROCESO"])
+                donde = f"{variable}.{g['NOMBRE']}.ID_PROCESO={pid}"
+
+                if pid in plan.nodos:
+                    continue  # ya reportado arriba como duplicado
+
+                if capa == "ODS" and dependencias_proceso(p):
+                    errores.append(
+                        f"{donde}: DEPENDE_DE no aplica en ODS. El orden de ODS se controla "
+                        f"con ORDEN del grupo y PARALELO."
+                    )
+
+                plan.nodos[pid] = Nodo(
+                    id_proceso=pid,
+                    capa=capa,
+                    grupo=g["NOMBRE"],
+                    orden=int(g.get("ORDEN", 0)),
+                    cfg=p,
+                    grupo_cfg=g,
                 )
 
-                if primera_tarea_grupo is None:
-                    primera_tarea_grupo = task
-                if not grupo_cfg.get("PARALELO", False) and tarea_anterior:
-                    tarea_anterior >> task
-                tarea_anterior = task
+    # --- aristas BDS -------------------------------------------------------
+    # ORDEN agrupa en niveles; un proceso sin DEPENDE_DE espera el nivel
+    # anterior completo (o ods_completo si esta en el primer nivel).
+    niveles_bds = sorted({int(g.get("ORDEN", 0)) for g in plan.bds})
+    procesos_por_nivel: dict[int, list[int]] = defaultdict(list)
+    for g in plan.bds:
+        for p in g["PROCESOS"]:
+            procesos_por_nivel[int(g.get("ORDEN", 0))].append(int(p["ID_PROCESO"]))
 
-        if primera_tarea_grupo:
-            primeras_tareas.append(primera_tarea_grupo)
-        ultimos_grupos.append(grupo_task)
+    inactivos_declarados = {
+        int(p["ID_PROCESO"])
+        for variable, cfg in ((VARIABLE_BDS, config_bds), (VARIABLE_ODS, config_ods))
+        for g in (cfg.get("GRUPOS") or [])
+        for p in (g.get("PROCESOS") or [])
+        if not proceso_activo(p, g.get("NOMBRE", "sin_nombre"), variable)
+    }
 
-        if grupo_anterior:
-            grupo_anterior >> grupo_task
-        grupo_anterior = grupo_task
+    for g in plan.bds:
+        orden = int(g.get("ORDEN", 0))
+        paralelo = bool(g.get("PARALELO", False))
+        indice_nivel = niveles_bds.index(orden)
+        anterior_en_grupo: int | None = None
 
-    return primeras_tareas, ultimos_grupos
+        for p in g["PROCESOS"]:
+            pid = int(p["ID_PROCESO"])
+            deps = dependencias_proceso(p)
+
+            if deps:
+                for d in deps:
+                    if d in plan.nodos:
+                        plan.aristas_bds.append((d, pid))
+                    elif d in inactivos_declarados:
+                        errores.append(
+                            f"{VARIABLE_BDS}.{g['NOMBRE']}.ID_PROCESO={pid} depende de "
+                            f"ID_PROCESO={d}, que existe pero esta ACTIVO='N'. "
+                            f"Activa {d} o quita la dependencia."
+                        )
+                    else:
+                        errores.append(
+                            f"{VARIABLE_BDS}.{g['NOMBRE']}.ID_PROCESO={pid} depende de "
+                            f"ID_PROCESO={d}, que no existe en ninguna de las dos Variables."
+                        )
+            elif not paralelo and anterior_en_grupo is not None:
+                plan.aristas_bds.append((anterior_en_grupo, pid))
+            elif indice_nivel == 0:
+                plan.aristas_bds.append(("ods_completo", pid))
+            else:
+                for previo in procesos_por_nivel[niveles_bds[indice_nivel - 1]]:
+                    plan.aristas_bds.append((previo, pid))
+
+            anterior_en_grupo = pid
+
+    # --- ciclos ------------------------------------------------------------
+    adyacencia: dict[int, list[int]] = defaultdict(list)
+    for origen, destino in plan.aristas_bds:
+        if isinstance(origen, int):
+            adyacencia[origen].append(destino)
+
+    estado: dict[int, int] = {}
+
+    def visitar(n: int, ruta: list[int]) -> None:
+        if estado.get(n) == 2:
+            return
+        if estado.get(n) == 1:
+            ciclo = ruta[ruta.index(n):] + [n]
+            errores.append("Ciclo de dependencias BDS: " + " -> ".join(map(str, ciclo)))
+            return
+        estado[n] = 1
+        for m in adyacencia.get(n, []):
+            visitar(m, ruta + [n])
+        estado[n] = 2
+
+    for n in list(adyacencia):
+        visitar(n, [])
+
+    if errores:
+        raise AirflowException(
+            f"Configuracion invalida de {DAG_ID} ({len(errores)} error(es)):\n  - "
+            + "\n  - ".join(errores)
+        )
+    return plan
 
 
-CONFIG_ODS = cargar_config(VARIABLE_ODS, DEFAULT_CONFIG_ODS)
-CONFIG_BDS = cargar_config(VARIABLE_BDS, DEFAULT_CONFIG_BDS)
-GRUPOS_ODS = grupos_con_procesos_activos(CONFIG_ODS, VARIABLE_ODS)
-GRUPOS_BDS = grupos_con_procesos_activos(CONFIG_BDS, VARIABLE_BDS)
-validar_dependencias_bds(GRUPOS_BDS)
+def plan_a_markdown(plan: Plan) -> str:
+    """Documentacion del DAG (pestana Docs de la UI)."""
+    lineas = [f"# {DAG_ID}", "", "## ODS", ""]
+    if not plan.ods:
+        lineas.append(f"_Sin procesos activos en {VARIABLE_ODS}._")
+    for g in plan.ods:
+        modo = "paralelo" if g.get("PARALELO") else "secuencial"
+        lineas.append(f"**{task_id_grupo('ODS', g['NOMBRE'])}** - orden {g.get('ORDEN', 0)}, {modo}")
+        for p in g["PROCESOS"]:
+            lineas.append(f"- `{task_id_proceso(p)}` -> {p.get('STORED_PROCEDURE')}")
+        lineas.append("")
 
+    lineas += ["## BDS", ""]
+    if not plan.bds:
+        lineas.append(f"_Sin procesos activos en {VARIABLE_BDS}._")
+    entrantes: dict[int, list[str]] = defaultdict(list)
+    for origen, destino in plan.aristas_bds:
+        entrantes[destino].append(str(origen))
+    for g in plan.bds:
+        modo = "paralelo" if g.get("PARALELO") else "secuencial"
+        lineas.append(f"**{task_id_grupo('BDS', g['NOMBRE'])}** - orden {g.get('ORDEN', 0)}, {modo}")
+        for p in g["PROCESOS"]:
+            pid = int(p["ID_PROCESO"])
+            lineas.append(f"- `{task_id_proceso(p)}` <- {', '.join(entrantes[pid]) or 'nada'}")
+        lineas.append("")
+    return "\n".join(lineas)
+
+
+def alertar_fallo(context) -> None:
+    """Deja una linea de ERROR con todo el contexto del proceso.
+
+    email_on_failure esta en False porque el stack no tiene SMTP configurado.
+    Este callback es el punto unico donde enganchar Slack, Teams o PagerDuty
+    mas adelante, sin tocar cada tarea.
+    """
+    ti = context.get("task_instance")
+    logger.error(
+        "[ALERTA] %s.%s fallo | run_id=%s | intento %s de %s | %s",
+        context["dag"].dag_id,
+        getattr(ti, "task_id", "?"),
+        context.get("run_id"),
+        getattr(ti, "try_number", "?"),
+        getattr(ti, "max_tries", "?"),
+        context.get("exception"),
+    )
+
+
+# ============================================================================
+# CONSTRUCCION DEL DAG
+# ============================================================================
+PLAN = construir_plan(
+    cargar_config(VARIABLE_ODS, DEFAULT_CONFIG_ODS),
+    cargar_config(VARIABLE_BDS, DEFAULT_CONFIG_BDS),
+)
 
 default_args = {
     "owner": "data-engineering",
@@ -241,86 +498,95 @@ default_args = {
     "email_on_retry": False,
     "retries": 0,
     "retry_delay": timedelta(minutes=5),
+    "on_failure_callback": alertar_fallo,
 }
 
 
+def crear_tarea(nodo: Nodo, callable_proceso) -> PythonOperator:
+    cfg, grupo_cfg = nodo.cfg, nodo.grupo_cfg
+    return PythonOperator(
+        task_id=task_id_proceso(cfg),
+        python_callable=callable_proceso,
+        op_kwargs={"id_proceso": nodo.id_proceso, "nombre_grupo": nodo.grupo},
+        retries=int(cfg.get("REINTENTOS", grupo_cfg.get("REINTENTOS", 0))),
+        execution_timeout=timedelta(minutes=max(int(cfg.get("TIMEOUT_MINUTOS", 30)), 1)),
+        pool=pool_de(cfg, grupo_cfg),
+        doc_md=(
+            f"**{nodo.capa} / {nodo.grupo}** - ID_PROCESO {nodo.id_proceso}  \n"
+            f"Stored procedure: `{cfg.get('STORED_PROCEDURE')}`  \n"
+            f"Origen: `{cfg.get('SCHEMA_ORIGEN')}.{cfg.get('TABLA_ORIGEN')}`  \n"
+            f"Destino: `{cfg.get('SCHEMA_DESTINO')}.{cfg.get('TABLA_DESTINO')}`"
+        ),
+    )
+
+
 with DAG(
-    dag_id="BT_DATAHUB",
-    description="Orquesta DataHub completo: procesos ODS y luego procesos BDS con dependencias declaradas",
+    dag_id=DAG_ID,
+    description="Orquesta DataHub completo: capa ODS por grupos y capa BDS con dependencias",
     start_date=datetime(2025, 1, 1),
     schedule=None,
     catchup=False,
     max_active_runs=1,
     tags=["BT", "ODS", "BDS", "datahub", "singlestore"],
     default_args=default_args,
+    doc_md=plan_a_markdown(PLAN),
 ) as dag:
     inicio = EmptyOperator(task_id="inicio")
     ods_completo = EmptyOperator(task_id="ods_completo")
     bds_completo = EmptyOperator(task_id="bds_completo")
     fin = EmptyOperator(task_id="fin")
 
-    primeras_ods, ultimos_ods = crear_tareas_capa_secuencial(
-        grupos=GRUPOS_ODS,
-        capa="ODS",
-        callable_proceso=ejecutar_ods,
-    )
+    tareas: dict[int, PythonOperator] = {}
 
-    if primeras_ods:
-        inicio >> primeras_ods
-        ultimos_ods >> ods_completo
+    # ---------------- ODS: niveles por ORDEN --------------------------------
+    niveles_ods: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for grupo_cfg in PLAN.ods:
+        niveles_ods[int(grupo_cfg.get("ORDEN", 0))].append(grupo_cfg)
+
+    nivel_anterior: list = [inicio]
+    for orden in sorted(niveles_ods):
+        nivel_actual = []
+        for grupo_cfg in niveles_ods[orden]:
+            modo = "paralelo" if grupo_cfg.get("PARALELO") else "secuencial"
+            with TaskGroup(
+                group_id=task_id_grupo("ODS", grupo_cfg["NOMBRE"]),
+                tooltip=f"ODS - {grupo_cfg['NOMBRE']} (orden {orden}, {modo})",
+            ) as grupo_task:
+                tarea_anterior = None
+                for proceso_cfg in grupo_cfg["PROCESOS"]:
+                    pid = int(proceso_cfg["ID_PROCESO"])
+                    task = crear_tarea(PLAN.nodos[pid], ejecutar_ods)
+                    tareas[pid] = task
+                    if not grupo_cfg.get("PARALELO", False) and tarea_anterior is not None:
+                        tarea_anterior >> task
+                    tarea_anterior = task
+            nivel_anterior >> grupo_task
+            nivel_actual.append(grupo_task)
+        nivel_anterior = nivel_actual
+    nivel_anterior >> ods_completo
+
+    # ---------------- BDS: grupos + aristas del plan ------------------------
+    tareas_bds = []
+    for grupo_cfg in PLAN.bds:
+        modo = "paralelo" if grupo_cfg.get("PARALELO") else "secuencial"
+        with TaskGroup(
+            group_id=task_id_grupo("BDS", grupo_cfg["NOMBRE"]),
+            tooltip=f"BDS - {grupo_cfg['NOMBRE']} (orden {grupo_cfg.get('ORDEN', 0)}, {modo})",
+        ):
+            for proceso_cfg in grupo_cfg["PROCESOS"]:
+                pid = int(proceso_cfg["ID_PROCESO"])
+                task = crear_tarea(PLAN.nodos[pid], ejecutar_bds)
+                tareas[pid] = task
+                tareas_bds.append(task)
+
+    for origen, destino in PLAN.aristas_bds:
+        (ods_completo if origen == "ods_completo" else tareas[origen]) >> tareas[destino]
+
+    # bds_completo espera todo; fin espera solo las hojas, para que el grafo
+    # no se llene de aristas redundantes.
+    if tareas_bds:
+        tareas_bds >> bds_completo
+        hojas = [t for t in tareas_bds if not t.downstream_list]
+        (hojas or [bds_completo]) >> fin
     else:
-        inicio >> ods_completo
-
-    tareas_bds_por_id = {}
-    bds_tasks = []
-
-    for grupo_cfg in GRUPOS_BDS:
-        nombre = grupo_cfg["NOMBRE"]
-        procesos = sorted(
-            grupo_cfg.get("PROCESOS", []),
-            key=lambda item: int(item.get("ID_PROCESO", 0)),
-        )
-
-        with TaskGroup(group_id=task_id_grupo("BDS", nombre), tooltip=f"BDS - {nombre}"):
-            tarea_anterior = None
-            for proceso_cfg in procesos:
-                proceso_id = int(proceso_cfg["ID_PROCESO"])
-                task = PythonOperator(
-                    task_id=task_id_proceso("BDS", proceso_cfg),
-                    python_callable=ejecutar_bds,
-                    op_kwargs={
-                        "id_proceso": proceso_id,
-                        "nombre_grupo": nombre,
-                    },
-                    retries=int(proceso_cfg.get("REINTENTOS", grupo_cfg.get("REINTENTOS", 0))),
-                    execution_timeout=timedelta(
-                        minutes=max(int(proceso_cfg.get("TIMEOUT_MINUTOS", 30)), 1)
-                    ),
-                )
-                tareas_bds_por_id[proceso_id] = task
-                bds_tasks.append(task)
-
-                if (
-                    not grupo_cfg.get("PARALELO", False)
-                    and tarea_anterior
-                    and not dependencias_proceso(proceso_cfg)
-                ):
-                    tarea_anterior >> task
-                tarea_anterior = task
-
-    for grupo_cfg in GRUPOS_BDS:
-        for proceso_cfg in grupo_cfg.get("PROCESOS", []):
-            proceso_id = int(proceso_cfg["ID_PROCESO"])
-            dependencias = dependencias_proceso(proceso_cfg)
-            if dependencias:
-                for dependencia_id in dependencias:
-                    tareas_bds_por_id[dependencia_id] >> tareas_bds_por_id[proceso_id]
-            else:
-                ods_completo >> tareas_bds_por_id[proceso_id]
-
-    if bds_tasks:
-        for task in bds_tasks:
-            task >> bds_completo
-        bds_tasks >> fin
-    else:
-        ods_completo >> fin
+        ods_completo >> bds_completo >> fin

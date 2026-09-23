@@ -1,0 +1,32 @@
+# ============================================================================
+#  .airflowignore  -  que NO debe parsear el DagBag
+# ============================================================================
+#
+#  Airflow recorre airflow/dags/ e IMPORTA todo .py que encuentre, cada
+#  dag_dir_list_interval (30 s por defecto). Los patrones son expresiones
+#  regulares evaluadas contra la ruta relativa a este directorio.
+#
+#  Los modulos de abajo son LIBRERIAS, no DAGs: los importan los DAGs reales.
+#  Sin este archivo, Airflow los importa cada 30 s cargando pyodbc, ibm_db,
+#  pyarrow, pandas y singlestoredb para nada, y cualquier error dentro de
+#  ellos aparece como "Broken DAG" de un DAG que en realidad no existe.
+#
+#  Para comprobar que quedo bien:
+#      docker compose exec airflow-scheduler airflow dags list
+#  Deben aparecer BT_DATAHUB, etl_bt_parquet_singlestore y
+#  etl_bt_parquet_singlestore_spark, y ninguno mas de estas carpetas.
+# ============================================================================
+
+# Librerias del pipeline parquet.
+# El DAG real es dag_bt_parquet_singlestore.py, que hace
+#     from etl.carga_parquet import ejecutar_carga
+# Ese import sigue funcionando: .airflowignore solo afecta al DagBag.
+production/etl/
+
+# Modulos de ejecucion ODS/BDS. Los carga dag_bt_datahub.py con importlib al
+# ejecutar cada tarea. Sus bloques "with DAG(...)" estan comentados, asi que
+# hoy no registran DAGs, pero igual se parsean sin este patron.
+production/etl-datahub/
+
+# Bytecode
+__pycache__/

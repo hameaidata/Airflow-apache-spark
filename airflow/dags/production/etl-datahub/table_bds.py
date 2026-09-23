@@ -23,12 +23,35 @@ TABLA_CFG_PROCESOS = "CTL_CFG_PROCESOS"
 CAPA_DEFAULT = "BDS"
 AMBIENTE_DEFAULT = "PRD"
 
+# Mismo valor que TABLA_LOG_DEFAULT en table_ods.py: ODS y BDS escriben en la
+# MISMA tabla de log, diferenciados por la columna CAPA. Antes el fallback de
+# este archivo decia CONTROL_EJECUCIONES (sin _SP) y el de table_ods decia
+# MON_EJECUCIONES, asi que sin AUDITORIA.TABLA_LOG en el JSON los logs se
+# repartian en tres tablas distintas.
+TABLA_LOG_DEFAULT = "CONTROL_EJECUCIONES_SP"
+
+# Columnas explicitas en vez de SELECT *. Ver la nota en table_ods.py.
+COLUMNAS_CFG_PROCESOS = (
+    "ID_PROCESO",
+    "CAPA",
+    "GRUPO_PROCESO",
+    "NOMBRE_PROCESO",
+    "TIPO_PROCESO",
+    "STORED_PROCEDURE",
+    "SCHEMA_SP",
+    "SCHEMA_ORIGEN",
+    "TABLA_ORIGEN",
+    "SCHEMA_DESTINO",
+    "TABLA_DESTINO",
+    "ACTIVO",
+)
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 TASK_ID_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
 DEFAULT_AUDITORIA: dict[str, Any] = {
     "REGISTRAR_LOG": True,
-    "TABLA_LOG": "CONTROL_EJECUCIONES_SP",
+    "TABLA_LOG": TABLA_LOG_DEFAULT,
     "REGISTRAR_DURACION": True,
     "REGISTRAR_ERROR": True,
 }
@@ -247,36 +270,22 @@ def validar_dependencias_bds(grupos_bds: list[dict[str, Any]]) -> None:
 
 class ConfigRepository:
     @staticmethod
-    def obtener_activos(capa: str) -> dict[int, dict[str, Any]]:
-        SingleStoreConnection.validar_conectividad()
-        conn = SingleStoreConnection.get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT  *
-                FROM    {TABLA_CFG_PROCESOS}
-                WHERE   ACTIVO = 'S'
-                  AND   CAPA = %s
-                """,
-                (capa,),
-            )
-            columnas = [col[0].upper() for col in cursor.description]
-            if "ID_PROCESO" not in columnas:
-                raise AirflowException(
-                    f"{TABLA_CFG_PROCESOS} debe devolver la columna ID_PROCESO."
-                )
-
-            id_idx = columnas.index("ID_PROCESO")
-            return {
-                int(row[id_idx]): {
-                    **{columna: row[idx] for idx, columna in enumerate(columnas)},
-                    "ID_PROCESO": int(row[id_idx]),
-                }
-                for row in cursor.fetchall()
-            }
-        finally:
-            conn.close()
+    def obtener_proceso(conn, id_proceso: int, capa: str) -> dict[str, Any] | None:
+        """Lee UNA fila del catalogo, reutilizando la conexion de la tarea."""
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {', '.join(COLUMNAS_CFG_PROCESOS)} "
+            f"FROM {TABLA_CFG_PROCESOS} "
+            f"WHERE ID_PROCESO = %s AND CAPA = %s AND ACTIVO = 'S'",
+            (id_proceso, capa),
+        )
+        fila = cursor.fetchone()
+        if fila is None:
+            return None
+        columnas = [col[0].upper() for col in cursor.description]
+        proceso = dict(zip(columnas, fila))
+        proceso["ID_PROCESO"] = int(proceso["ID_PROCESO"])
+        return proceso
 
 
 class LogRepository:
@@ -295,7 +304,7 @@ class LogRepository:
             return
 
         tabla_log = validar_identificador(
-            auditoria.get("TABLA_LOG", "CONTROL_EJECUCIONES"),
+            auditoria.get("TABLA_LOG") or TABLA_LOG_DEFAULT,
             "AUDITORIA.TABLA_LOG",
         )
         duracion = round((fin - inicio).total_seconds(), 2)
@@ -355,14 +364,15 @@ class ProcesoExecutor:
 
     @staticmethod
     def ejecutar_singlestore(
+        conn,
         proceso: dict[str, Any],
         auditoria: dict[str, Any],
         airflow_ctx: dict[str, str],
     ) -> dict[str, Any]:
+        """Ejecuta PRE_SQL + CALL + POST_SQL sobre la conexion ya abierta."""
         inicio = datetime.now()
         estado = "SUCCESS"
         error = None
-        conn = SingleStoreConnection.get_connection()
         try:
             cursor = conn.cursor()
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("PRE_SQL", []), "PRE_SQL", proceso)
@@ -371,11 +381,15 @@ class ProcesoExecutor:
             conn.commit()
             return {"ID_PROCESO": proceso["ID_PROCESO"], "ESTADO": estado}
         except Exception as exc:
-            conn.rollback()
             estado = "FAILED"
             error = str(exc)
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning("Fallo el rollback", exc_info=True)
             raise
         finally:
+            # El log no puede tapar la excepcion real del proceso.
             try:
                 LogRepository.registrar(
                     conn=conn,
@@ -387,8 +401,12 @@ class ProcesoExecutor:
                     fin=datetime.now(),
                     error=error,
                 )
-            finally:
-                conn.close()
+            except Exception:
+                logger.exception(
+                    "No se pudo registrar el log de ID_PROCESO=%s. Resultado real: %s",
+                    proceso.get("ID_PROCESO"),
+                    estado,
+                )
 
 
 def procesos_json_por_grupo(config: dict[str, Any], nombre_grupo: str) -> list[dict[str, Any]]:
@@ -449,6 +467,7 @@ def validar_y_enriquecer(
 
 
 def ejecutar_proceso(
+    conn,
     proceso: dict[str, Any],
     auditoria: dict[str, Any],
     airflow_ctx: dict[str, str],
@@ -460,7 +479,7 @@ def ejecutar_proceso(
             "Este DAG ejecuta procedimientos almacenados en SingleStore."
         )
 
-    return ProcesoExecutor.ejecutar_singlestore(proceso, auditoria, airflow_ctx)
+    return ProcesoExecutor.ejecutar_singlestore(conn, proceso, auditoria, airflow_ctx)
 
 
 def buscar_proceso_json(
@@ -494,7 +513,8 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
     if not grupo:
         raise AirflowException(f"Grupo {nombre_grupo!r} no existe en {VARIABLE_CONFIG}.")
 
-    activos_db = ConfigRepository.obtener_activos(CAPA_DEFAULT)
+    # El chequeo de "esta activo en el JSON" no necesita base de datos: va
+    # antes de conectarse para que un proceso apagado no gaste una conexion.
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
     if not proceso_activo(proceso_json, nombre_grupo):
         raise AirflowSkipException(
@@ -502,24 +522,31 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
             f"en {VARIABLE_CONFIG}; no se ejecuta."
         )
 
-    proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
-    proceso = validar_y_enriquecer(
-        proceso_json,
-        proceso_db,
-        config,
-        nombre_grupo,
-    )
-    if not proceso:
-        return None
+    SingleStoreConnection.validar_conectividad()
 
-    logger.info(
-        "Ejecutando proceso BDS | grupo=%s id=%s nombre=%s sp=%s",
-        nombre_grupo,
-        proceso["ID_PROCESO"],
-        proceso["NOMBRE_PROCESO"],
-        proceso["STORED_PROCEDURE"],
-    )
-    return ejecutar_proceso(proceso, auditoria, airflow_ctx)
+    # UNA sola conexion para todo: leer el catalogo, ejecutar y registrar.
+    conn = SingleStoreConnection.get_connection()
+    try:
+        proceso_db = ConfigRepository.obtener_proceso(
+            conn, int(proceso_json["ID_PROCESO"]), CAPA_DEFAULT
+        )
+        proceso = validar_y_enriquecer(proceso_json, proceso_db, config, nombre_grupo)
+        if not proceso:
+            return None
+
+        logger.info(
+            "Ejecutando proceso BDS | grupo=%s id=%s nombre=%s sp=%s",
+            nombre_grupo,
+            proceso["ID_PROCESO"],
+            proceso["NOMBRE_PROCESO"],
+            proceso["STORED_PROCEDURE"],
+        )
+        return ejecutar_proceso(conn, proceso, auditoria, airflow_ctx)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            logger.warning("Fallo al cerrar la conexion SingleStore", exc_info=True)
 
 
 def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:

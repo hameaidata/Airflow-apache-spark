@@ -81,7 +81,7 @@
           "VALIDAR_CFG": true
         },
         {
-          "ID_PROCESO": 105,
+          "ID_PROCESO": 107,
           "NOMBRE_PROCESO": "CARGA_STG_ODS_MODULO_RUBRO",
           "TIPO_PROCESO": "SP",
           "SCHEMA_ORIGEN": "DATAHUB",

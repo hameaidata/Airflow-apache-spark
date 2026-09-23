@@ -1,54 +1,44 @@
 {
   "max_worker": 4,
   "chunk_size": 10000,
-  "output_dir": "/opt/airflow/parquet",
-  "sql_fecha": "SELECT STR_TO_DATE(PGFCIE, '%Y%m%d') AS FECHA_PROCESO FROM STG_FST017",
-  "tb_proceso_parquet": "ctl_proceso_parquet",
-  "sql_parametros_parquet": "SELECT  ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO ='S'",
+  "output_dir": "/data/parquet",
+  "retencion_dias": 7,
+  "sql_fecha": "SELECT STR_TO_DATE(PGFCIE, '%Y%m%d') AS FECHA_PROCESO FROM STG_FST017 LIMIT 1",
+  "tb_proceso_parquet": "CTL_PROCESO_PARQUET",
+  "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
+  "error_size_limit": 4000,
   "procesos": [
     {
       "nombre_proceso": "STG_FSH005",
       "estado": 1,
-      "esquema": "GPPPBTDB",
-      "tabla": "STG_FSH005",
       "prioridad": 1,
       "estado_diario": 1,
       "estado_semanal": 0,
-      "estado_mensual": 0,
-      "parquet": "FSH005.parquet"
+      "estado_mensual": 0
     },
     {
       "nombre_proceso": "STG_MSFD008",
       "estado": 1,
-      "esquema": "GPPPBTMD",
-      "tabla": "STG_MSFD008",
       "prioridad": 1,
       "estado_diario": 1,
       "estado_semanal": 0,
-      "estado_mensual": 0,
-      "parquet": "MSFD008.parquet"
+      "estado_mensual": 0
     },
     {
       "nombre_proceso": "STG_FSH031",
       "estado": 1,
-      "esquema": "GPPPBTDB",
-      "tabla": "STG_FSH031",
       "prioridad": 1,
       "estado_diario": 1,
       "estado_semanal": 0,
-      "estado_mensual": 0,
-      "parquet": "FSH031.parquet"
+      "estado_mensual": 0
     },
     {
       "nombre_proceso": "STG_FSH012",
       "estado": 1,
-      "esquema": "GPPPBTDB",
-      "tabla": "STG_FSH012",
       "prioridad": 1,
       "estado_diario": 1,
       "estado_semanal": 0,
-      "estado_mensual": 0,
-      "parquet": "FSH012.parquet"
+      "estado_mensual": 0
     }
   ]
 }

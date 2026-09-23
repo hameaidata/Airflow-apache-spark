@@ -59,6 +59,16 @@ x-airflow-common: &airflow-common
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/plugins:/opt/airflow/plugins
     - ./airflow/config:/opt/airflow/config
+    # Utilidades de operacion (sync_variables.py) y tests. Solo lectura: no hay
+    # razon para que un contenedor escriba aqui.
+    - ./scripts:/opt/airflow/scripts:ro
+    - ./airflow/tests:/opt/airflow/tests:ro
+    # Carpeta de parquet FUERA del contenedor. El host lo define
+    # PARQUET_HOST_DIR en .env (una linea para Windows y otra para Red Hat).
+    # Esta ruta de contenedor es la que se guarda en CTL_PROCESO_PARQUET y la
+    # que lee la carga para subir a STG, asi que debe coincidir con output_dir
+    # de la Variable EXTRACCION_BT_STG.
+    - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
     # spark-submit corre DESDE el worker de Airflow: necesita ver el .py del job
     - ./spark/jobs:/opt/spark-apps
     # area compartida con el cluster de Spark (parquet, checkpoints)
@@ -172,8 +182,12 @@ services:
       - ./airflow/dags:/opt/airflow/dags
       - ./airflow/plugins:/opt/airflow/plugins
       - ./airflow/config:/opt/airflow/config
+      - ./scripts:/opt/airflow/scripts:ro
+      - ./airflow/tests:/opt/airflow/tests:ro
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
       - ./spark/jobs:/opt/spark-apps
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
       - airflow_logs:/opt/airflow/logs
       # Configuracion de autenticacion de la UI. Airflow lo busca justo aqui.
       # Si el archivo no existe en el host, Docker crea una CARPETA con ese
@@ -323,6 +337,7 @@ services:
       - ./spark/jobs:/opt/spark-apps
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
     ports:
       - "${SPARK_MASTER_UI_PORT:-8082}:8080"   # UI  (8082 para no chocar con Airflow)
       - "${SPARK_MASTER_PORT:-7077}:7077"      # submit
@@ -370,6 +385,7 @@ services:
       - ./spark/jobs:/opt/spark-apps
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8081' || exit 1"]
       interval: 15s

@@ -79,6 +79,18 @@ x-airflow-common: &airflow-common
     - ./airflow/dags:/opt/airflow/dags:z
     - ./airflow/plugins:/opt/airflow/plugins:z
     - ./airflow/config:/opt/airflow/config:z
+    - ./scripts:/opt/airflow/scripts:z,ro
+    - ./airflow/tests:/opt/airflow/tests:z,ro
+    # Carpeta de parquet FUERA del contenedor. El host lo define
+    # PARQUET_HOST_DIR en .env (en RHEL: /datos/datahub/parquet).
+    # Debe pertenecer al UID 50000:
+    #     sudo mkdir -p /datos/datahub/parquet
+    #     sudo chown -R 50000:0 /datos/datahub/parquet && sudo chmod -R 775 ...
+    # La etiqueta :z es obligatoria con SELinux, o el contenedor no escribe.
+    # Esta ruta de contenedor es la que se guarda en CTL_PROCESO_PARQUET y la
+    # que lee la carga para subir a STG: debe coincidir con output_dir de la
+    # Variable EXTRACCION_BT_STG.
+    - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
     # spark-submit corre DESDE el worker de Airflow: necesita ver el .py del job
     - ./spark/jobs:/opt/spark-apps:z
     # area compartida con el cluster de Spark (parquet, checkpoints)
@@ -191,8 +203,12 @@ services:
       - ./airflow/dags:/opt/airflow/dags:z
       - ./airflow/plugins:/opt/airflow/plugins:z
       - ./airflow/config:/opt/airflow/config:z
+      - ./scripts:/opt/airflow/scripts:z,ro
+      - ./airflow/tests:/opt/airflow/tests:z,ro
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
       - ./spark/jobs:/opt/spark-apps:z
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
       - airflow_logs:/opt/airflow/logs
       # Configuracion de autenticacion de la UI. Airflow lo busca justo aqui.
       # Si el archivo no existe en el host, Docker crea una CARPETA con ese
@@ -342,6 +358,7 @@ services:
       - ./spark/jobs:/opt/spark-apps:z
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
     ports:
       - "${SPARK_MASTER_UI_PORT:-8082}:8080"   # UI  (8082 para no chocar con Airflow)
       - "${SPARK_MASTER_PORT:-7077}:7077"      # submit
@@ -389,6 +406,7 @@ services:
       - ./spark/jobs:/opt/spark-apps:z
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
+      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8081' || exit 1"]
       interval: 15s

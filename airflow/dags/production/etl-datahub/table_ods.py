@@ -21,6 +21,30 @@ VARIABLE_CONFIG = "DAG_ODS_TABLAS"
 SINGLESTORE_CONN_ID = "CONEXION_SINGLESTORE"
 TABLA_CFG_PROCESOS = "CTL_CFG_PROCESOS"
 
+# Nombre unico de la tabla de log. Antes habia dos valores distintos en este
+# mismo archivo (CONTROL_EJECUCIONES_SP en DEFAULT_CONFIG y MON_EJECUCIONES
+# como fallback de LogRepository), asi que segun si la Variable traia
+# AUDITORIA.TABLA_LOG o no, los logs se repartian entre dos tablas.
+TABLA_LOG_DEFAULT = "CONTROL_EJECUCIONES_SP"
+
+# Columnas que el codigo necesita de CTL_CFG_PROCESOS. Explicitas y no
+# SELECT *: con SELECT *, cualquier columna nueva de la tabla entra al
+# diccionario del proceso y puede pisar una clave del JSON en el merge
+# {**proceso_db, **proceso_json}.
+COLUMNAS_CFG_PROCESOS = (
+    "ID_PROCESO",
+    "CAPA",
+    "GRUPO_PROCESO",
+    "NOMBRE_PROCESO",
+    "TIPO_PROCESO",
+    "STORED_PROCEDURE",
+    "SCHEMA_ORIGEN",
+    "TABLA_ORIGEN",
+    "SCHEMA_DESTINO",
+    "TABLA_DESTINO",
+    "ACTIVO",
+)
+
 IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -34,7 +58,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "GRUPOS": [],
     "AUDITORIA": {
         "REGISTRAR_LOG": True,
-        "TABLA_LOG": "CONTROL_EJECUCIONES_SP",
+        "TABLA_LOG": TABLA_LOG_DEFAULT,
         "REGISTRAR_REGISTROS_PROCESADOS": True,
         "REGISTRAR_DURACION": True,
         "REGISTRAR_ERROR": True,
@@ -51,7 +75,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
 def cargar_config(parse_time: bool = False) -> dict[str, Any]:
     """Lee el JSON de Airflow usado como contrato del DAG."""
     try:
-        logger.info(f"[INFO] Iniciando la ejecucion -->>")
         return Variable.get(VARIABLE_CONFIG, deserialize_json=True)
     except Exception as exc:
         if parse_time:
@@ -67,10 +90,7 @@ def cargar_config(parse_time: bool = False) -> dict[str, Any]:
 
 
 CONFIG_PARSE = cargar_config(parse_time=True)
-logger.info(
-    "CONFIG_PARSE: %s",
-    CONFIG_PARSE
-)
+
 
 class SingleStoreConnection:
     @staticmethod
@@ -122,7 +142,6 @@ def validar_identificador(valor: str, campo: str) -> str:
 
 
 def nombre_sp(proceso: dict[str, Any]) -> str:
-    logger.info(f"Mostrando el flujo de nombre_sp")
     sp = validar_identificador(proceso["STORED_PROCEDURE"], "STORED_PROCEDURE")
     if "." in sp:
         return sp
@@ -184,37 +203,28 @@ def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str) -> bool:
 
 class ConfigRepository:
     @staticmethod
-    def obtener_activos(capa: str) -> dict[int, dict[str, Any]]:
-        SingleStoreConnection.validar_conectividad()
-        conn = SingleStoreConnection.get_connection()
-        try:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT  *
-                FROM    {TABLA_CFG_PROCESOS}
-                WHERE   ACTIVO = 'S'
-                  AND   CAPA = %s
-                """,
-                (capa,),
-            )
-            columnas = [col[0].upper() for col in cursor.description]
-            logger.info(f"Columnas {columnas}")
-            if "ID_PROCESO" not in columnas:
-                raise AirflowException(
-                    f"{TABLA_CFG_PROCESOS} debe devolver la columna ID_PROCESO."
-                )
+    def obtener_proceso(conn, id_proceso: int, capa: str) -> dict[str, Any] | None:
+        """Lee UNA fila del catalogo, reutilizando la conexion de la tarea.
 
-            id_idx = columnas.index("ID_PROCESO")
-            return {
-                int(row[id_idx]): {
-                    **{columna: row[idx] for idx, columna in enumerate(columnas)},
-                    "ID_PROCESO": int(row[id_idx]),
-                }
-                for row in cursor.fetchall()
-            }
-        finally:
-            conn.close()
+        Antes esto hacia SELECT * de todo el catalogo y abria dos conexiones
+        propias (una para el pre-check TCP y otra para la consulta), en cada
+        tarea. Con 22 procesos eso eran 22 escaneos completos y 44 conexiones
+        por corrida, ademas de la conexion de ejecucion.
+        """
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {', '.join(COLUMNAS_CFG_PROCESOS)} "
+            f"FROM {TABLA_CFG_PROCESOS} "
+            f"WHERE ID_PROCESO = %s AND CAPA = %s AND ACTIVO = 'S'",
+            (id_proceso, capa),
+        )
+        fila = cursor.fetchone()
+        if fila is None:
+            return None
+        columnas = [col[0].upper() for col in cursor.description]
+        proceso = dict(zip(columnas, fila))
+        proceso["ID_PROCESO"] = int(proceso["ID_PROCESO"])
+        return proceso
 
 
 class LogRepository:
@@ -233,7 +243,7 @@ class LogRepository:
             return
 
         tabla_log = validar_identificador(
-            auditoria.get("TABLA_LOG", "MON_EJECUCIONES"),
+            auditoria.get("TABLA_LOG") or TABLA_LOG_DEFAULT,
             "AUDITORIA.TABLA_LOG",
         )
         duracion = round((fin - inicio).total_seconds(), 2)
@@ -284,37 +294,42 @@ class ProcesoExecutor:
     @staticmethod
     def ejecutar_sp(cursor, proceso: dict[str, Any]) -> None:
         parametros = proceso.get("PARAMETROS") or []
-        logger.info(f"Mostrando los parametros {parametros}")
         marcadores = ", ".join(["%s"] * len(parametros))
         llamada = f"CALL {nombre_sp(proceso)}({marcadores})"
-        logger.info("[%s] Ejecutando %s", proceso["NOMBRE_PROCESO"], llamada)
+        logger.info("[%s] %s  params=%s", proceso["NOMBRE_PROCESO"], llamada, parametros)
         cursor.execute(llamada, tuple(parametros))
 
     @staticmethod
     def ejecutar_singlestore(
+        conn,
         proceso: dict[str, Any],
         auditoria: dict[str, Any],
         airflow_ctx: dict[str, str],
     ) -> dict[str, Any]:
+        """Ejecuta PRE_SQL + CALL + POST_SQL sobre la conexion ya abierta."""
         inicio = datetime.now()
         estado = "SUCCESS"
         error = None
-        conn = SingleStoreConnection.get_connection()
         try:
             cursor = conn.cursor()
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("PRE_SQL", []), "PRE_SQL", proceso)
-            logger.info(f"Mostrando la secuencia de la linea 1 {proceso}")
             ProcesoExecutor.ejecutar_sp(cursor, proceso)
-            logger.info(f"Mostrando la secuencia de la linea 2")
             ProcesoExecutor.ejecutar_sqls(cursor, proceso.get("POST_SQL", []), "POST_SQL", proceso)
             conn.commit()
             return {"ID_PROCESO": proceso["ID_PROCESO"], "ESTADO": estado}
         except Exception as exc:
-            conn.rollback()
             estado = "FAILED"
             error = str(exc)
+            try:
+                conn.rollback()
+            except Exception:
+                logger.warning("Fallo el rollback", exc_info=True)
             raise
         finally:
+            # El log se escribe en finally, pero NO puede tapar la excepcion
+            # real del proceso: si registrar() falla (tabla inexistente,
+            # conexion caida), esa excepcion reemplazaria a la original y se
+            # perderia la causa raiz.
             try:
                 LogRepository.registrar(
                     conn=conn,
@@ -326,8 +341,12 @@ class ProcesoExecutor:
                     fin=datetime.now(),
                     error=error,
                 )
-            finally:
-                conn.close()
+            except Exception:
+                logger.exception(
+                    "No se pudo registrar el log de ID_PROCESO=%s. Resultado real: %s",
+                    proceso.get("ID_PROCESO"),
+                    estado,
+                )
 
 
 def procesos_json_por_grupo(config: dict[str, Any], nombre_grupo: str) -> list[dict[str, Any]]:
@@ -381,13 +400,13 @@ def validar_y_enriquecer(
 
 
 def ejecutar_proceso(
+    conn,
     proceso: dict[str, Any],
     auditoria: dict[str, Any],
     spark_cfg: dict[str, Any],
     airflow_ctx: dict[str, str],) -> dict[str, Any]:
     tipo = str(proceso.get("TIPO_PROCESO", "SP")).upper()
     usar_spark = tipo == "SPARK" or proceso.get("USAR_SPARK") is True
-    logger.info(f"Mostrando la ejecucion de procesos{proceso} ")
     if usar_spark or (spark_cfg.get("HABILITADO") and tipo != "SP"):
         raise AirflowException(
             "Este proceso esta marcado para Spark, pero table_ods.py todavia "
@@ -400,7 +419,7 @@ def ejecutar_proceso(
             f"TIPO_PROCESO no soportado para {proceso['NOMBRE_PROCESO']}: {tipo}"
         )
 
-    return ProcesoExecutor.ejecutar_singlestore(proceso, auditoria, airflow_ctx)
+    return ProcesoExecutor.ejecutar_singlestore(conn, proceso, auditoria, airflow_ctx)
 
 
 def buscar_proceso_json(
@@ -417,7 +436,6 @@ def buscar_proceso_json(
 
 
 def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str, Any] | None:
-    logger.info(f"[INFO] Inciando proceso de ejecucion desde el archivo")
     context = get_current_context()
     config = render_valor(cargar_config(parse_time=False), context)
     auditoria = config.get("AUDITORIA", DEFAULT_CONFIG["AUDITORIA"])
@@ -435,33 +453,41 @@ def ejecutar_proceso_desde_json(id_proceso: int, nombre_grupo: str) -> dict[str,
     if not grupo:
         raise AirflowException(f"Grupo {nombre_grupo!r} no existe en {VARIABLE_CONFIG}.")
 
-    SingleStoreConnection.validar_conectividad()
-    activos_db = ConfigRepository.obtener_activos(config.get("CAPA", "ODS"))
+    # El chequeo de "esta activo en el JSON" no necesita base de datos, asi
+    # que va antes de conectarse: un proceso desactivado no debe gastar una
+    # conexion para terminar en skip.
     proceso_json = buscar_proceso_json(config, nombre_grupo, id_proceso)
     if not proceso_activo(proceso_json, nombre_grupo):
         raise AirflowSkipException(
             f"Proceso {id_proceso} del grupo {nombre_grupo!r} esta inactivo "
             f"en {VARIABLE_CONFIG}; no se ejecuta."
         )
-    logger.info(f"[INFO] Mostrando la linea de comentario")
-    proceso_db = activos_db.get(int(proceso_json["ID_PROCESO"]))
-    proceso = validar_y_enriquecer(
-        proceso_json,
-        proceso_db,
-        config,
-        nombre_grupo,
-    )
-    logger.info(f"[INFO] Mostrandome el contenido de la respuesta {proceso}")
-    if not proceso:
-        return None
 
-    logger.info(
-        "Ejecutando proceso ODS | grupo=%s id=%s nombre=%s",
-        nombre_grupo,
-        proceso["ID_PROCESO"],
-        proceso["NOMBRE_PROCESO"],
-    )
-    return ejecutar_proceso(proceso, auditoria, spark_cfg, airflow_ctx)
+    SingleStoreConnection.validar_conectividad()
+
+    # UNA sola conexion para todo: leer el catalogo, ejecutar y registrar.
+    conn = SingleStoreConnection.get_connection()
+    try:
+        proceso_db = ConfigRepository.obtener_proceso(
+            conn, int(proceso_json["ID_PROCESO"]), config.get("CAPA", "ODS")
+        )
+        proceso = validar_y_enriquecer(proceso_json, proceso_db, config, nombre_grupo)
+        if not proceso:
+            return None
+
+        logger.info(
+            "Ejecutando proceso ODS | grupo=%s id=%s nombre=%s sp=%s",
+            nombre_grupo,
+            proceso["ID_PROCESO"],
+            proceso["NOMBRE_PROCESO"],
+            proceso.get("STORED_PROCEDURE"),
+        )
+        return ejecutar_proceso(conn, proceso, auditoria, spark_cfg, airflow_ctx)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            logger.warning("Fallo al cerrar la conexion SingleStore", exc_info=True)
 
 
 def grupos_ordenados(config: dict[str, Any]) -> list[dict[str, Any]]:
