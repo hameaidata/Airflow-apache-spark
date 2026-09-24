@@ -1,0 +1,69 @@
+# =============================================================================
+#  Paso reutilizable: verificacion POSTERIOR al despliegue
+# -----------------------------------------------------------------------------
+#  Un despliegue que termina sin error no significa que el sistema funcione.
+#  Estos son los cuatro controles que separan "se instalo" de "quedo operativo".
+#
+#  Si alguno falla, el pipeline marca el despliegue como fallido aunque la
+#  instalacion en si haya salido bien, y el stage de Reversion imprime las
+#  instrucciones.
+# =============================================================================
+
+parameters:
+  - name: target
+    type: string
+  - name: catalogo
+    type: string
+  - name: tokenVar
+    type: string
+
+steps:
+
+  # ---------------------------------------------------------------------------
+  # 1. Los trabajos existen y estan HABILITADOS.
+  #    El caso que atrapa: un trabajo desplegado pero en pausa. Nada falla
+  #    nunca, simplemente no carga, y se descubre dias despues cuando alguien
+  #    nota que una tabla lleva tiempo sin moverse.
+  # ---------------------------------------------------------------------------
+  - script: |
+      python -m tests.despliegue.verificar_trabajos \
+        --target ${{ parameters.target }} \
+        --esperados conf/trabajos_esperados.yml
+    displayName: 'Verificar trabajos habilitados'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})
+
+  # ---------------------------------------------------------------------------
+  # 2. La programacion es la del entorno, no la de desarrollo en pausa.
+  # ---------------------------------------------------------------------------
+  - script: |
+      python -m tests.despliegue.verificar_programacion \
+        --target ${{ parameters.target }}
+    displayName: 'Verificar programacion'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})
+
+  # ---------------------------------------------------------------------------
+  # 3. Los permisos de Unity Catalog son los declarados.
+  #    Un permiso otorgado a mano en la interfaz debe haber desaparecido con
+  #    este despliegue, que es exactamente lo que se busca.
+  # ---------------------------------------------------------------------------
+  - script: |
+      python -m tests.despliegue.verificar_permisos \
+        --catalogo ${{ parameters.catalogo }} \
+        --esperados conf/permisos_esperados.yml
+    displayName: 'Verificar permisos de Unity Catalog'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})
+
+  # ---------------------------------------------------------------------------
+  # 4. Consulta de humo contra cada tabla Gold: responde y trae filas.
+  #    No valida el contenido -eso es trabajo de las reglas de calidad-, sino
+  #    que la capa de consumo esta viva despues del cambio.
+  # ---------------------------------------------------------------------------
+  - script: |
+      python -m tests.despliegue.humo_gold \
+        --catalogo ${{ parameters.catalogo }}
+    displayName: 'Consulta de humo sobre Gold'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})

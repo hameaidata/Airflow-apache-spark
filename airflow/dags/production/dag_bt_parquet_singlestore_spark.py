@@ -1,15 +1,106 @@
+"""
+etl_bt_parquet_singlestore_spark - Version Spark del pipeline Parquet.
+
+    preparar_config_spark -> extraer_parquet_spark -> cargar_singlestore_spark
+
+Hace lo mismo que etl_bt_parquet_singlestore pero delegando el trabajo pesado
+a un cluster Spark en vez de a pandas dentro del worker de Airflow.
+"""
+
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
+import sys
 from datetime import datetime, timedelta
 
+from airflow.configuration import conf
 from airflow.exceptions import AirflowException
 from airflow.models.dag import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 
-from operators.spark_operator import BsgSparkJdbcOperator
+
+# ============================================================================
+# IMPORTACION DEL OPERADOR PROPIO
+# ============================================================================
+# Sintoma que corrige este bloque:
+#
+#     Broken DAG: [/opt/airflow/dags/production/dag_bt_parquet_singlestore_spark.py]
+#     ModuleNotFoundError: No module named 'operators.spark_operator'
+#
+# El operador vive en airflow/plugins/operators/spark_operator.py, y el archivo
+# esta ahi: el modulo se importa sin problemas en cuanto la carpeta plugins/
+# esta en sys.path. Airflow normalmente la anade el solo
+# (settings.prepare_syspath), y por eso el "from operators.spark_operator ..."
+# pelado funcionaba. Depender de eso es fragil por tres motivos:
+#
+#   1. "operators" es un nombre de primer nivel demasiado generico. Cualquier
+#      paquete instalado que se llame igual lo tapa, y como la carpeta plugins/
+#      se ANADE al final de sys.path, el intruso gana. El mensaje en ese caso
+#      es exactamente el de arriba: "operators" se encuentra, pero
+#      spark_operator no esta dentro. Ese matiz es la pista: si la carpeta
+#      simplemente no estuviera en sys.path, el error diria
+#      "No module named 'operators'", sin el sufijo.
+#
+#   2. prepare_syspath() solo corre en procesos que inicializan Airflow por
+#      completo. Un proceso que parsea el archivo sin esa inicializacion no ve
+#      la carpeta.
+#
+#   3. Si el bind mount ./airflow/plugins no llega a algun contenedor, ahi la
+#      carpeta esta vacia y el import falla solo en ese servicio, de forma
+#      intermitente segun quien parsee el archivo.
+#
+# El DAG hermano (dag_bt_parquet_singlestore.py) nunca se rompio porque resuelve
+# su ruta el mismo con sys.path.insert. Aqui se hace lo mismo y, ademas, si el
+# nombre "operators" estuviera ocupado por otro paquete, se carga el archivo
+# por RUTA ABSOLUTA, que no puede ser tapado por nadie.
+# ============================================================================
+
+PLUGINS_FOLDER = conf.get("core", "plugins_folder", fallback="/opt/airflow/plugins")
+
+if PLUGINS_FOLDER and PLUGINS_FOLDER not in sys.path:
+    sys.path.append(PLUGINS_FOLDER)
+
+
+def _cargar_operador_spark():
+    """Devuelve BsgSparkJdbcOperator, venga de donde venga.
+
+    Primero el import normal. Si falla, carga el archivo directamente de
+    plugins/operators/spark_operator.py. Si tampoco esta, lanza un error que
+    dice QUE se busco y DONDE, en vez del ModuleNotFoundError pelado que
+    obliga a adivinar.
+    """
+    try:
+        from operators.spark_operator import BsgSparkJdbcOperator
+        return BsgSparkJdbcOperator
+    except ImportError as exc_import:
+        ruta = os.path.join(PLUGINS_FOLDER, "operators", "spark_operator.py")
+        if not os.path.isfile(ruta):
+            raise AirflowException(
+                f"No se encuentra el operador Spark del proyecto.\n"
+                f"  Import fallido : from operators.spark_operator import BsgSparkJdbcOperator\n"
+                f"  Motivo         : {exc_import}\n"
+                f"  Archivo buscado: {ruta} (NO EXISTE)\n"
+                f"  plugins_folder : {PLUGINS_FOLDER}\n"
+                f"Revisa que el docker-compose monte ./airflow/plugins en "
+                f"{PLUGINS_FOLDER} para ESTE servicio."
+            ) from exc_import
+
+        # El archivo existe pero el nombre "operators" apunta a otro sitio.
+        # Se carga por ruta, registrandolo en sys.modules con un nombre propio
+        # para no pelearse con el paquete que ocupa "operators".
+        spec = importlib.util.spec_from_file_location("bsg_spark_operator", ruta)
+        modulo = importlib.util.module_from_spec(spec)
+        # Registrar ANTES de ejecutar: sin esto, las dataclasses y cualquier
+        # referencia al propio modulo durante la ejecucion fallan.
+        sys.modules[spec.name] = modulo
+        spec.loader.exec_module(modulo)
+        return modulo.BsgSparkJdbcOperator
+
+
+BsgSparkJdbcOperator = _cargar_operador_spark()
 
 
 SINGLESTORE_CONN_ID = "CONEXION_SINGLESTORE"
@@ -121,6 +212,7 @@ with DAG(
     catchup=False,
     max_active_runs=1,
     default_args=default_args,
+    doc_md=__doc__,
     tags=["etl", "parquet", "singlestore", "spark", "produccion"],
 ) as dag:
 

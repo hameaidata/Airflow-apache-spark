@@ -67,8 +67,84 @@ RUN if [ "$INSTALAR_ODBC" = "true" ]; then \
       echo "ODBC omitido (INSTALAR_ODBC=false)"; \
     fi
 
+# ----------------------------------------------------------------------------
+# Java 8, JUNTO a Java 17 (no en lugar de)
+# ----------------------------------------------------------------------------
+# POR QUE LOS DOS
+#
+#   Java 17  lo exige el resto del stack: Spark 3.5.3 y el driver
+#            mssql-jdbc-12.8.1.jre11, cuyo sufijo .jre11 significa
+#            literalmente "necesita Java 11 o superior". Con Java 8 ese jar
+#            NO carga.
+#
+#   Java 8   lo piden clientes y herramientas antiguas: drivers JDBC
+#            propietarios compilados para 1.8, utilidades de proveedor, o un
+#            servidor que solo negocia cifrados que la JVM moderna ya retiro.
+#
+# Los dos conviven sin estorbarse porque JAVA_HOME sigue apuntando a 17: nada
+# de lo que hoy funciona cambia. Java 8 queda en una ruta conocida, para cuando
+# algo lo pida:
+#
+#     JAVA_HOME=$JAVA_HOME_8 spark-submit ...      # un comando suelto
+#     JAVA_HOME=$JAVA_HOME_8                       # o por entorno del servicio
+#
+# ATENCION: UNA JVM POR PROCESO
+# JPype, que es lo que usa jaydebeapi por debajo, arranca UNA sola JVM por
+# proceso de Python y no se puede reiniciar ni cambiar de version en caliente.
+# Dentro de una misma tarea de Airflow se usa Java 8 o Java 17, nunca los dos.
+# Por eso se descargan las DOS variantes del driver de SQL Server y el codigo
+# elige la que corresponde a la JVM con la que arranco (ver s2sql_comun.py).
+#
+# DE DONDE SALE
+# Debian 12 (bookworm) ya NO trae openjdk-8: se quedo en buster. Se usa Temurin,
+# de Adoptium, que es la continuacion del OpenJDK 8 de AdoptOpenJDK.
+#
+# Si packages.adoptium.net esta bloqueado en la red, el build NO falla: el paso
+# tolera el error y la imagen sale con Java 17 solamente, con un aviso. En ese
+# caso descargue el tar.gz de Temurin 8 desde una maquina con salida y
+# descomprimalo con COPY en /usr/lib/jvm/temurin-8-jdk-amd64.
+# ----------------------------------------------------------------------------
+# El codename se saca de /etc/os-release y no se escribe a mano: si algun dia
+# se cambia la imagen base a trixie, esta linea sigue valiendo.
+#
+# Despues del install se crea el enlace /usr/lib/jvm/java-8. El paquete de
+# Adoptium se instala en un directorio cuyo nombre incluye la arquitectura
+# (temurin-8-jdk-amd64, -arm64...), asi que fijar esa ruta a mano serviria en
+# una maquina y fallaria en otra. El enlace la normaliza.
+ARG INSTALAR_JAVA8=true
+RUN if [ "$INSTALAR_JAVA8" = "true" ]; then \
+      ( set -e; \
+        codename=$(awk -F= '/^VERSION_CODENAME/{print $2}' /etc/os-release); \
+        curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+          | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg && \
+        echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${codename} main" \
+          > /etc/apt/sources.list.d/adoptium.list && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends temurin-8-jdk && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*; \
+        ruta=$(ls -d /usr/lib/jvm/temurin-8-* 2>/dev/null | head -1); \
+        test -n "$ruta"; \
+        ln -sfn "$ruta" /usr/lib/jvm/java-8; \
+        echo "Java 8 enlazado: /usr/lib/jvm/java-8 -> $ruta" ) \
+      || echo "AVISO: no se instalo Java 8 (red bloqueada?). La imagen queda con Java 17."; \
+    else \
+      echo "Java 8 omitido (INSTALAR_JAVA8=false)"; \
+    fi
+
+# Rutas estables de las dos JVM. JAVA_HOME sigue siendo 17 a proposito: es lo
+# que usan spark-submit y el driver .jre11, y no se toca.
+ENV JAVA_HOME_17=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME_8=/usr/lib/jvm/java-8
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# El build no falla si Java 8 no entro: solo lo deja dicho, para que se vea en
+# la salida de docker build y no se descubra meses despues en una tarea.
+RUN echo "=== JVM disponibles ===" && \
+    "${JAVA_HOME_17}/bin/java" -version 2>&1 | head -1 && \
+    ( "${JAVA_HOME_8}/bin/java" -version 2>&1 | head -1 \
+      || echo "Java 8: NO INSTALADO. Reconstruya con salida a packages.adoptium.net" ) && \
+    echo "JAVA_HOME por defecto = ${JAVA_HOME}"
 
 # --- Cliente de Spark -------------------------------------------------------
 # Debe coincidir con la version del cluster (SPARK_IMAGE_TAG en tu .env).
@@ -115,8 +191,25 @@ ENV PATH="${SPARK_HOME}/bin:${PATH}"
 # (.../12.8.1.jre11/mssql-jdbc-12.8.1.jre11.jar) y asi debe ser.
 # ============================================================================
 
+# LAS DOS VARIANTES DE mssql-jdbc, A PROPOSITO
+#
+# El sufijo jreNN de este driver NO es cosmetico: dice para que bytecode se
+# compilo el jar.
+#
+#     mssql-jdbc.jar        12.8.1.jre11   necesita Java 11 o superior
+#     mssql-jdbc-jre8.jar   12.8.1.jre8    corre en Java 8
+#
+# Como la imagen trae las dos JVM y JPype solo puede levantar UNA por proceso,
+# el codigo mira con que Java arranco y elige el jar que le corresponde. Cargar
+# el jar equivocado da un UnsupportedClassVersionError, cuyo mensaje habla de
+# "class file version 55.0" y no menciona en ningun momento que el problema sea
+# la version de Java, asi que es de los errores que mas tiempo hacen perder.
+#
+# La 12.8 publica ambas variantes y esta soportada hasta julio de 2029 segun la
+# matriz de Microsoft. Las dos sirven contra SQL Server 2022.
 ARG JDBC_DRIVERS="\
 com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11:mssql-jdbc.jar \
+com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre8:mssql-jdbc-jre8.jar \
 com.ibm.db2:jcc:11.5.9.0:db2-jcc.jar \
 com.mysql:mysql-connector-j:9.1.0:mysql-jdbc.jar \
 org.postgresql:postgresql:42.7.4:postgresql-jdbc.jar \
@@ -209,17 +302,8 @@ RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
         "pandas" \
         "pyarrow"
 
-RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
-        "apache-airflow-providers-microsoft-mssql" \
-        "apache-airflow-providers-postgres" \
-        "apache-airflow-providers-mysql" \
-        "apache-airflow-providers-jdbc" \
-        "apache-airflow-providers-odbc" \
-        "apache-airflow-providers-common-sql" \
-        "apache-airflow-providers-apache-spark" \
-        "pyodbc" \
-        "pandas" \
-        "pyarrow"
+# (Aqui habia un segundo pip install identico al anterior, con menos paquetes.
+#  Era una capa entera de build repetida sin efecto: se quito.)
 
 # ----------------------------------------------------------------------------
 # pyspark: DEBE coincidir con la version del cluster, y por eso va aparte.

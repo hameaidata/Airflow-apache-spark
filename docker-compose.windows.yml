@@ -69,6 +69,7 @@ x-airflow-common: &airflow-common
     # que lee la carga para subir a STG, asi que debe coincidir con output_dir
     # de la Variable EXTRACCION_BT_STG.
     - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
+    - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}
     # spark-submit corre DESDE el worker de Airflow: necesita ver el .py del job
     - ./spark/jobs:/opt/spark-apps
     # area compartida con el cluster de Spark (parquet, checkpoints)
@@ -185,9 +186,11 @@ services:
       - ./scripts:/opt/airflow/scripts:ro
       - ./airflow/tests:/opt/airflow/tests:ro
       - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
+      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}
       - ./spark/jobs:/opt/spark-apps
       - spark_data:/opt/spark-data
       - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
+      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}
       - airflow_logs:/opt/airflow/logs
       # Configuracion de autenticacion de la UI. Airflow lo busca justo aqui.
       # Si el archivo no existe en el host, Docker crea una CARPETA con ese
@@ -338,6 +341,7 @@ services:
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
       - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
+      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}
     ports:
       - "${SPARK_MASTER_UI_PORT:-8082}:8080"   # UI  (8082 para no chocar con Airflow)
       - "${SPARK_MASTER_PORT:-7077}:7077"      # submit
@@ -386,6 +390,7 @@ services:
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
       - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}
+      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8081' || exit 1"]
       interval: 15s

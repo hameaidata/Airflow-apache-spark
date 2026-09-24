@@ -76,6 +76,22 @@ def test_dags_esperados_presentes(dagbag):
     assert not faltantes, f"No se registraron: {sorted(faltantes)}"
 
 
+def test_bt_datahub_no_quedo_en_modo_configuracion_invalida(dagbag):
+    """BT_DATAHUB publica una tarea 'configuracion_invalida' cuando el JSON esta mal.
+
+    Eso es a proposito: mas vale un DAG visible que falla explicando el problema
+    que un Broken DAG que desaparece de la lista. Pero como el archivo SI importa,
+    test_ningun_dag_roto ya no atrapa un JSON mal escrito. Este test cubre ese
+    hueco: en CI la configuracion tiene que armar el grafo de verdad.
+    """
+    dag = dagbag.get_dag("BT_DATAHUB")
+    tarea = dag.get_task("configuracion_invalida") if "configuracion_invalida" in dag.task_ids else None
+    assert tarea is None, (
+        "BT_DATAHUB no pudo armar su grafo. Motivo:\n"
+        + (dag.doc_md or "(sin doc_md)")
+    )
+
+
 def test_no_hay_dags_duplicados_de_etl_datahub(dagbag):
     """table_ods.py y table_bds.py no deben registrar DAGs propios.
 
@@ -99,6 +115,42 @@ def test_ids_de_airflow_validos(dagbag):
                     f"puntos ni acentos en un group_id."
                 )
             assert RE_TASK_ID.match(partes[-1]), f"{dag_id}: task_id {partes[-1]!r} invalido"
+
+
+def test_el_dag_spark_resiste_un_operators_intruso(tmp_path):
+    """Regresion del Broken DAG 'No module named operators.spark_operator'.
+
+    El operador propio esta en airflow/plugins/operators/spark_operator.py y se
+    importaba como 'from operators.spark_operator import ...', confiando en que
+    Airflow hubiera puesto plugins/ en sys.path. Como esa carpeta se ANADE al
+    final, cualquier paquete instalado que se llame 'operators' la tapa, y el
+    DAG se rompe con ese mensaje exacto mientras el archivo sigue en su sitio.
+
+    Aqui se simula el intruso en un subproceso (no en este, para no ensuciar
+    sys.modules del resto de tests) y se exige que el DAG cargue igual.
+    """
+    import subprocess
+    import sys as _sys
+
+    intruso = tmp_path / "intruso" / "operators"
+    intruso.mkdir(parents=True)
+    (intruso / "__init__.py").touch()
+
+    guion = f"""
+import sys
+sys.path.insert(0, {str(tmp_path / "intruso")!r})
+import operators  # el intruso gana la resolucion del nombre
+from airflow.models import DagBag
+db = DagBag({str(DIR_DAGS)!r}, include_examples=False)
+rotos = [k for k in db.import_errors if "spark" in k]
+assert not rotos, db.import_errors
+assert "etl_bt_parquet_singlestore_spark" in db.dag_ids
+"""
+    proc = subprocess.run([_sys.executable, "-c", guion], capture_output=True, text=True)
+    assert proc.returncode == 0, (
+        "El DAG Spark vuelve a depender de que nadie ocupe el nombre 'operators':\n"
+        + proc.stdout + proc.stderr
+    )
 
 
 def test_sin_ciclos(dagbag):

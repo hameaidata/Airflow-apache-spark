@@ -1,0 +1,71 @@
+{
+  "_descripcion": "Variable del pipeline S2SQL (SingleStore -> SQL Server 2022). Solo infraestructura: QUE tablas se exportan vive en CTL.CTL_S2SQL_CATALOGO, en SQL Server. Las claves que empiezan con guion bajo son documentacion y el codigo las ignora.",
+  "_sincronizar": "python scripts/sync_variables.py --solo S2SQL_EXPORT_CONFIG",
+
+  "conexiones": {
+    "_nota": "Nombres de Connection de Airflow (Admin > Connections). Las credenciales viven ahi cifradas con el Fernet key, nunca en este archivo ni en el codigo.",
+    "_singlestore": "Tipo MySQL. host=192.168.18.25 port=3306 schema=DATAHUB",
+    "_sqlserver": "Tipo ODBC o MSSQL. port=1433. En Extra: {\"driver\": \"ODBC Driver 18 for SQL Server\", \"Encrypt\": \"yes\", \"TrustServerCertificate\": \"yes\"}. Encrypt=yes es el DEFECTO del Driver 18: contra un servidor con certificado autofirmado hace falta TrustServerCertificate o la conexion falla con un error de cadena de certificacion.",
+    "singlestore": "CONEXION_SINGLESTORE",
+    "sqlserver": "CONEXION_SQLSERVER"
+  },
+
+  "parquet": {
+    "_directorio": "Ruta DENTRO del contenedor. Tiene que ser igual que S2SQL_PARQUET_CONTAINER_DIR en .env, porque esa es la que se guarda en CTL_S2SQL_LOG_CARGA y la que despues abre la carga. La carpeta fisica esta FUERA del contenedor (bind mount) para que no se llene el disco de Docker.",
+    "_retencion_dias": "Dias que se conservan las carpetas /data/s2sql/<yyyyMMdd>/. Con 0 no se borra nada.",
+    "_compresion": "snappy es el equilibrio habitual: comprime bien y descomprime muy rapido. gzip ocupa menos pero cuesta mas CPU al cargar.",
+    "directorio": "/data/s2sql",
+    "retencion_dias": 7,
+    "compresion": "snappy"
+  },
+
+  "lectura": {
+    "_chunk_filas": "Filas por bloque al leer de SingleStore. Sube el numero para tablas anchas y estrechas; bajalo si el worker se queda sin memoria. Cada bloque se escribe al parquet y se libera.",
+    "chunk_filas": 50000
+  },
+
+  "escritura": {
+    "_batch_filas": "Filas por executemany contra SQL Server. Con JDBC no hay fast_executemany (eso es de pyodbc): el lote lo agrupa el PreparedStatement, asi que este numero es lo unico que gobierna el rendimiento de la escritura. Una fila del catalogo puede sobreescribirlo con su columna batch_filas.",
+    "_esquema_staging": "Esquema donde se crean las tablas intermedias. Si no existe, el codigo lo crea.",
+    "_prefijo_staging": "La staging de MI_TABLA es STG.S2SQL_MI_TABLA. El prefijo evita chocar con tablas de staging de otros procesos.",
+    "batch_filas": 5000,
+    "esquema_staging": "STG",
+    "prefijo_staging": "S2SQL_"
+  },
+
+  "jdbc": {
+    "_nota": "La conexion al destino va por JDBC (jaydebeapi sobre JPype), no por ODBC. El jar lo descarga el Dockerfile a /opt/airflow/jars/.",
+    "_clase": "Clase del driver de Microsoft. No cambia entre versiones del jar.",
+    "_jar": "Vacio = se elige solo segun la version de Java con la que arranco el proceso. Ponle una ruta solo si quieres forzar una.",
+    "_jar_jre11": "Driver compilado para Java 11 o superior. Es el que se usa con el JAVA_HOME por defecto de la imagen (Java 17).",
+    "_jar_jre8": "Driver compilado para Java 8. Se usa cuando el proceso corre con JAVA_HOME=$JAVA_HOME_8. Cargar el jar equivocado da UnsupportedClassVersionError, cuyo mensaje habla de class file version y no menciona Java.",
+    "_propiedades": "Se anaden a la URL JDBC. encrypt=true es el defecto desde el driver 10; contra un certificado autofirmado hace falta ademas trustServerCertificate=true. El Extra de la Connection puede sobreescribirlas, o traer jdbc_url entera para instancias con nombre o Always On.",
+    "clase": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+    "jar": "",
+    "jar_jre11": "/opt/airflow/jars/mssql-jdbc.jar",
+    "jar_jre8": "/opt/airflow/jars/mssql-jdbc-jre8.jar",
+    "propiedades": {
+      "encrypt": "true",
+      "trustServerCertificate": "true",
+      "loginTimeout": "30"
+    }
+  },
+
+  "control": {
+    "_nota": "Las tres tablas viven en SQL SERVER, el destino: quien consume los datos puede auditar que llego y cuando sin pedir acceso a SingleStore. El DDL esta en sql/s2sql/10_s2sql_control_sqlserver.sql.",
+    "_catalogo": "Que tablas se exportan y como. Es la unica fuente de la forma del lote.",
+    "_lote": "Una fila por corrida del DAG.",
+    "_log": "Una fila por tabla y corrida. De aqui sale tambien la marca de agua del modo INCREMENTAL.",
+    "esquema": "CTL",
+    "catalogo": "CTL_S2SQL_CATALOGO",
+    "lote": "CTL_S2SQL_LOTE",
+    "log": "CTL_S2SQL_LOG_CARGA"
+  },
+
+  "limites": {
+    "_mensaje_error": "Ancho de CTL_S2SQL_LOG_CARGA.msg_error. Los mensajes se recortan a esta medida: si no, una traza larga hace fallar el propio INSERT del log con 'String or binary data would be truncated' y se pierde el error original.",
+    "_tablas_por_corrida": "Tope de tareas dinamicas que el DAG puede crear de golpe. Es una red de seguridad: si alguien activa 5000 filas del catalogo por error, el lote no se abre en vez de inundar el scheduler.",
+    "mensaje_error": 4000,
+    "tablas_por_corrida": 200
+  }
+}

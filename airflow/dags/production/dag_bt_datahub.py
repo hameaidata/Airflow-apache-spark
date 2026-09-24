@@ -34,13 +34,18 @@ VALIDACION
 Todo se valida ANTES de crear tareas y se reportan TODOS los errores juntos,
 no solo el primero: IDs duplicados (dentro de la capa y entre capas), grupos
 que generan el mismo group_id, dependencias hacia procesos inexistentes o
-inactivos, y ciclos.
+inactivos, valores de ACTIVO que nadie contemplo, y ciclos.
+
+Si la configuracion es invalida, el DAG NO desaparece: se publica con una
+unica tarea, "configuracion_invalida", que falla mostrando la lista completa
+de problemas. Ver el bloque CONSTRUCCION DEL DAG al final del archivo.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import logging
+import os
 import re
 import sys
 from collections import defaultdict
@@ -69,13 +74,26 @@ VARIABLE_POR_CAPA = {"ODS": VARIABLE_ODS, "BDS": VARIABLE_BDS}
 BASE_DIR = Path(__file__).resolve().parent
 DATAHUB_DIR = BASE_DIR / "etl-datahub"
 
+# ----------------------------------------------------------------------------
 # Pool de Airflow que limita cuantas tareas golpean SingleStore a la vez.
 # Sin esto, un grupo con PARALELO=true y 20 procesos abre 20 conexiones de
 # golpe. Se puede sobreescribir por proceso o por grupo con la clave POOL.
-# El pool debe existir en Airflow (Admin > Pools); si no existe, las tareas
-# quedan en estado "scheduled" sin explicacion, por eso se puede desactivar
-# poniendo POOL: null en el JSON.
-POOL_DEFAULT = "singlestore"
+#
+# CUIDADO: si el pool NO existe en Airflow (Admin > Pools), las tareas quedan
+# en estado "scheduled" para siempre y la interfaz no dice por que. No es un
+# fallo, es una espera silenciosa, que es peor.
+#
+# Por eso el nombre sale de una variable de entorno: en un stack donde todavia
+# no se creo el pool, basta con poner en .env
+#
+#     AIRFLOW_POOL_SINGLESTORE=default_pool
+#
+# y las tareas corren sin limite mientras tanto. El valor por defecto sigue
+# siendo "singlestore" para no cambiar el comportamiento de lo que ya funciona.
+# Se lee del entorno y no de una Variable de Airflow porque esto se evalua en
+# cada parseo del archivo.
+# ----------------------------------------------------------------------------
+POOL_DEFAULT = os.environ.get("AIRFLOW_POOL_SINGLESTORE", "singlestore")
 
 # Airflow valida task_id y group_id con reglas distintas:
 #     task_id  -> ^[\w.-]+$   admite punto
@@ -97,15 +115,26 @@ def cargar_config(variable: str, default: dict[str, Any]) -> dict[str, Any]:
     Nunca lanza: si la Variable falta o esta mal, devuelve el default vacio y
     deja el DAG visible pero sin tareas. Un DAG vacio se diagnostica; un
     archivo que no importa desaparece de la UI sin dejar rastro claro.
+
+    Nota de rendimiento: esto es una consulta a la metadata database en CADA
+    parseo (cada 30 s por defecto). Es inevitable en un DAG cuya forma sale de
+    la configuracion, pero se puede amortiguar activando la cache de secretos
+    de Airflow en airflow.cfg o por entorno:
+
+        AIRFLOW__SECRETS__USE_CACHE=True
+        AIRFLOW__SECRETS__CACHE_TTL_SECONDS=900
+
+    Se devuelve una copia del default para que nadie pueda mutar el objeto
+    compartido a nivel de modulo.
     """
     try:
         config = Variable.get(variable, deserialize_json=True)
     except Exception as exc:
         logger.warning("No se pudo leer la Variable %s al parsear %s: %s", variable, DAG_ID, exc)
-        return default
+        return dict(default)
     if not isinstance(config, dict):
         logger.warning("La Variable %s no es un objeto JSON; se ignora.", variable)
-        return default
+        return dict(default)
     return config
 
 
@@ -120,33 +149,57 @@ def normalizar_estado_activo(valor: Any, campo: str) -> bool:
             return True
         if normalizado in {"N", "NO", "FALSE", "0", "INACTIVO", "DESHABILITADO"}:
             return False
-    raise AirflowException(
+    raise ValueError(
         f"{campo} invalido: {valor!r}. Use 'S'/'N', true/false o ACTIVO/INACTIVO."
     )
 
 
-def proceso_activo(proceso_cfg: dict[str, Any], nombre_grupo: str, variable: str) -> bool:
+def proceso_activo(
+    proceso_cfg: dict[str, Any],
+    nombre_grupo: str,
+    variable: str,
+    errores: list[str],
+) -> bool:
+    """Dice si el proceso esta activo, SIN cortar la validacion.
+
+    Antes esto lanzaba. El efecto era que un solo ACTIVO mal escrito abortaba
+    la validacion entera en la primera pasada, asi que el mensaje mostraba ese
+    error y ninguno de los demas: el operador corregia uno, volvia a guardar,
+    y aparecia el siguiente. Con una lista de errores esto se anota y se sigue,
+    que es lo que promete el docstring del modulo.
+
+    Un proceso mal declarado se trata como INACTIVO para que no llegue a crear
+    una tarea; de todas formas el DAG no se va a publicar con errores pendientes.
+    """
     for campo in ("ACTIVO", "HABILITADO", "ESTADO"):
         if campo in proceso_cfg:
-            return normalizar_estado_activo(
-                proceso_cfg[campo],
-                f"{variable}.GRUPOS.{nombre_grupo}.PROCESOS.{proceso_cfg.get('ID_PROCESO')}.{campo}",
-            )
-    raise AirflowException(
+            try:
+                return normalizar_estado_activo(
+                    proceso_cfg[campo],
+                    f"{variable}.GRUPOS.{nombre_grupo}.PROCESOS."
+                    f"{proceso_cfg.get('ID_PROCESO')}.{campo}",
+                )
+            except ValueError as exc:
+                errores.append(str(exc))
+                return False
+    errores.append(
         f"El proceso {proceso_cfg.get('ID_PROCESO')!r} / "
         f"{proceso_cfg.get('NOMBRE_PROCESO')!r} del grupo {nombre_grupo!r} "
         f"en {variable} debe declarar ACTIVO='S' o ACTIVO='N'."
     )
+    return False
 
 
-def grupos_con_procesos_activos(config: dict[str, Any], variable: str) -> list[dict[str, Any]]:
+def grupos_con_procesos_activos(
+    config: dict[str, Any], variable: str, errores: list[str]
+) -> list[dict[str, Any]]:
     grupos = []
     for grupo_cfg in config.get("GRUPOS", []) or []:
         nombre_grupo = grupo_cfg.get("NOMBRE", "sin_nombre")
         procesos_activos = [
             proceso_cfg
             for proceso_cfg in grupo_cfg.get("PROCESOS", []) or []
-            if proceso_activo(proceso_cfg, nombre_grupo, variable)
+            if proceso_activo(proceso_cfg, nombre_grupo, variable, errores)
         ]
         if procesos_activos:
             procesos_activos = sorted(procesos_activos, key=lambda p: int(p["ID_PROCESO"]))
@@ -154,8 +207,12 @@ def grupos_con_procesos_activos(config: dict[str, Any], variable: str) -> list[d
     return sorted(grupos, key=lambda item: int(item.get("ORDEN", 0)))
 
 
-def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
-    """Acepta [], 2001, '2001,2002' o [2001, 2002]."""
+def dependencias_proceso(proceso_cfg: dict[str, Any], errores: list[str]) -> list[int]:
+    """Acepta [], 2001, '2001,2002' o [2001, 2002].
+
+    Igual que proceso_activo: un valor mal escrito se anota y se devuelve una
+    lista vacia, para no cortar la validacion en el primer error.
+    """
     valor = None
     for campo in ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS"):
         if campo in proceso_cfg:
@@ -175,9 +232,10 @@ def dependencias_proceso(proceso_cfg: dict[str, Any]) -> list[int]:
             return [int(item) for item in valor]
     except (TypeError, ValueError):
         pass
-    raise AirflowException(
+    errores.append(
         f"Dependencias invalidas para ID_PROCESO={proceso_cfg.get('ID_PROCESO')}: {valor!r}"
     )
+    return []
 
 
 # ============================================================================
@@ -290,11 +348,12 @@ class Plan:
 
 
 def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Plan:
-    plan = Plan(
-        ods=grupos_con_procesos_activos(config_ods, VARIABLE_ODS),
-        bds=grupos_con_procesos_activos(config_bds, VARIABLE_BDS),
-    )
     errores: list[str] = []
+
+    plan = Plan(
+        ods=grupos_con_procesos_activos(config_ods, VARIABLE_ODS, errores),
+        bds=grupos_con_procesos_activos(config_bds, VARIABLE_BDS, errores),
+    )
 
     # --- unicidad sobre TODO lo declarado, activo o no ----------------------
     # ID_PROCESO es la clave de CTL_CFG_PROCESOS, asi que un duplicado es un
@@ -338,7 +397,7 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
                 if pid in plan.nodos:
                     continue  # ya reportado arriba como duplicado
 
-                if capa == "ODS" and dependencias_proceso(p):
+                if capa == "ODS" and dependencias_proceso(p, errores):
                     errores.append(
                         f"{donde}: DEPENDE_DE no aplica en ODS. El orden de ODS se controla "
                         f"con ORDEN del grupo y PARALELO."
@@ -362,12 +421,14 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
         for p in g["PROCESOS"]:
             procesos_por_nivel[int(g.get("ORDEN", 0))].append(int(p["ID_PROCESO"]))
 
+    # Los errores de ACTIVO ya se anotaron en la primera pasada; aqui solo
+    # interesa saber quien quedo fuera, asi que se descarta la lista.
     inactivos_declarados = {
         int(p["ID_PROCESO"])
         for variable, cfg in ((VARIABLE_BDS, config_bds), (VARIABLE_ODS, config_ods))
         for g in (cfg.get("GRUPOS") or [])
         for p in (g.get("PROCESOS") or [])
-        if not proceso_activo(p, g.get("NOMBRE", "sin_nombre"), variable)
+        if not proceso_activo(p, g.get("NOMBRE", "sin_nombre"), variable, [])
     }
 
     for g in plan.bds:
@@ -378,7 +439,7 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
 
         for p in g["PROCESOS"]:
             pid = int(p["ID_PROCESO"])
-            deps = dependencias_proceso(p)
+            deps = dependencias_proceso(p, errores)
 
             if deps:
                 for d in deps:
@@ -429,9 +490,12 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
         visitar(n, [])
 
     if errores:
+        # Se quitan repetidos conservando el orden: un mismo proceso puede
+        # recorrerse en dos pasadas y no aporta nada verlo dos veces.
+        unicos = list(dict.fromkeys(errores))
         raise AirflowException(
-            f"Configuracion invalida de {DAG_ID} ({len(errores)} error(es)):\n  - "
-            + "\n  - ".join(errores)
+            f"Configuracion invalida de {DAG_ID} ({len(unicos)} error(es)):\n  - "
+            + "\n  - ".join(unicos)
         )
     return plan
 
@@ -486,10 +550,41 @@ def alertar_fallo(context) -> None:
 # ============================================================================
 # CONSTRUCCION DEL DAG
 # ============================================================================
-PLAN = construir_plan(
-    cargar_config(VARIABLE_ODS, DEFAULT_CONFIG_ODS),
-    cargar_config(VARIABLE_BDS, DEFAULT_CONFIG_BDS),
-)
+# construir_plan lanza cuando la configuracion es invalida. Si esa excepcion
+# escapa del modulo, Airflow marca el archivo como Broken DAG y BT_DATAHUB
+# DESAPARECE de la lista: no se ve el historial, ni las tareas, ni las Docs, y
+# el motivo queda en un banner que hay que ir a buscar. Es exactamente lo que
+# cargar_config se cuida de evitar ("un DAG vacio se diagnostica; un archivo
+# que no importa desaparece de la UI sin dejar rastro claro"), asi que aqui se
+# aplica el mismo criterio.
+#
+# Con la configuracion rota, el DAG se publica con una sola tarea que falla
+# citando todos los problemas. Se ve en la lista, se abre, se lee el error en
+# su log y en las Docs, y no hay manera de ejecutar procesos por accidente.
+#
+# Se capturan todas las excepciones, no solo AirflowException: un ID_PROCESO
+# que falta o que no es un numero saldria como KeyError o ValueError, y el
+# resultado para quien opera debe ser el mismo.
+# ============================================================================
+ERROR_CONFIG: str | None = None
+try:
+    PLAN = construir_plan(
+        cargar_config(VARIABLE_ODS, DEFAULT_CONFIG_ODS),
+        cargar_config(VARIABLE_BDS, DEFAULT_CONFIG_BDS),
+    )
+    DOC_MD = plan_a_markdown(PLAN)
+except Exception as exc:
+    PLAN = Plan()
+    ERROR_CONFIG = str(exc)
+    DOC_MD = (
+        f"# {DAG_ID} - configuracion invalida\n\n"
+        f"El DAG no se pudo armar. Corrige las Variables `{VARIABLE_ODS}` y/o "
+        f"`{VARIABLE_BDS}` (versionadas en `airflow/config/json/`) y vuelve a "
+        f"sincronizarlas con `scripts/sync_variables.py`.\n\n"
+        f"```\n{ERROR_CONFIG}\n```\n"
+    )
+    logger.error("%s no se pudo armar. %s", DAG_ID, ERROR_CONFIG)
+
 
 default_args = {
     "owner": "data-engineering",
@@ -520,6 +615,10 @@ def crear_tarea(nodo: Nodo, callable_proceso) -> PythonOperator:
     )
 
 
+def fallar_por_configuracion() -> None:
+    raise AirflowException(ERROR_CONFIG)
+
+
 with DAG(
     dag_id=DAG_ID,
     description="Orquesta DataHub completo: capa ODS por grupos y capa BDS con dependencias",
@@ -527,66 +626,86 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
+    # Con max_active_runs=1, una corrida atascada bloquea TODAS las siguientes.
+    # execution_timeout protege cada tarea por separado, pero no cubre el tiempo
+    # que una tarea pasa en queued (por ejemplo esperando un slot del pool) ni
+    # en up_for_retry. dagrun_timeout es el tope duro de la corrida completa.
+    dagrun_timeout=timedelta(hours=12),
     tags=["BT", "ODS", "BDS", "datahub", "singlestore"],
     default_args=default_args,
-    doc_md=plan_a_markdown(PLAN),
+    doc_md=DOC_MD,
 ) as dag:
-    inicio = EmptyOperator(task_id="inicio")
-    ods_completo = EmptyOperator(task_id="ods_completo")
-    bds_completo = EmptyOperator(task_id="bds_completo")
-    fin = EmptyOperator(task_id="fin")
 
-    tareas: dict[int, PythonOperator] = {}
+    if ERROR_CONFIG:
+        PythonOperator(
+            task_id="configuracion_invalida",
+            python_callable=fallar_por_configuracion,
+            execution_timeout=timedelta(minutes=1),
+            retries=0,
+            doc_md=DOC_MD,
+        )
+    else:
+        inicio = EmptyOperator(task_id="inicio")
+        ods_completo = EmptyOperator(task_id="ods_completo")
+        bds_completo = EmptyOperator(task_id="bds_completo")
+        fin = EmptyOperator(task_id="fin")
 
-    # ---------------- ODS: niveles por ORDEN --------------------------------
-    niveles_ods: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for grupo_cfg in PLAN.ods:
-        niveles_ods[int(grupo_cfg.get("ORDEN", 0))].append(grupo_cfg)
+        tareas: dict[int, PythonOperator] = {}
 
-    nivel_anterior: list = [inicio]
-    for orden in sorted(niveles_ods):
-        nivel_actual = []
-        for grupo_cfg in niveles_ods[orden]:
+        # ---------------- ODS: niveles por ORDEN ----------------------------
+        niveles_ods: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for grupo_cfg in PLAN.ods:
+            niveles_ods[int(grupo_cfg.get("ORDEN", 0))].append(grupo_cfg)
+
+        nivel_anterior: list = [inicio]
+        for orden in sorted(niveles_ods):
+            nivel_actual = []
+            for grupo_cfg in niveles_ods[orden]:
+                modo = "paralelo" if grupo_cfg.get("PARALELO") else "secuencial"
+                with TaskGroup(
+                    group_id=task_id_grupo("ODS", grupo_cfg["NOMBRE"]),
+                    tooltip=f"ODS - {grupo_cfg['NOMBRE']} (orden {orden}, {modo})",
+                ) as grupo_task:
+                    tarea_anterior = None
+                    for proceso_cfg in grupo_cfg["PROCESOS"]:
+                        pid = int(proceso_cfg["ID_PROCESO"])
+                        task = crear_tarea(PLAN.nodos[pid], ejecutar_ods)
+                        tareas[pid] = task
+                        if not grupo_cfg.get("PARALELO", False) and tarea_anterior is not None:
+                            tarea_anterior >> task
+                        tarea_anterior = task
+                nivel_anterior >> grupo_task
+                nivel_actual.append(grupo_task)
+            nivel_anterior = nivel_actual
+        nivel_anterior >> ods_completo
+
+        # ---------------- BDS: grupos + aristas del plan --------------------
+        tareas_bds = []
+        for grupo_cfg in PLAN.bds:
             modo = "paralelo" if grupo_cfg.get("PARALELO") else "secuencial"
             with TaskGroup(
-                group_id=task_id_grupo("ODS", grupo_cfg["NOMBRE"]),
-                tooltip=f"ODS - {grupo_cfg['NOMBRE']} (orden {orden}, {modo})",
-            ) as grupo_task:
-                tarea_anterior = None
+                group_id=task_id_grupo("BDS", grupo_cfg["NOMBRE"]),
+                tooltip=f"BDS - {grupo_cfg['NOMBRE']} (orden {grupo_cfg.get('ORDEN', 0)}, {modo})",
+            ):
                 for proceso_cfg in grupo_cfg["PROCESOS"]:
                     pid = int(proceso_cfg["ID_PROCESO"])
-                    task = crear_tarea(PLAN.nodos[pid], ejecutar_ods)
+                    task = crear_tarea(PLAN.nodos[pid], ejecutar_bds)
                     tareas[pid] = task
-                    if not grupo_cfg.get("PARALELO", False) and tarea_anterior is not None:
-                        tarea_anterior >> task
-                    tarea_anterior = task
-            nivel_anterior >> grupo_task
-            nivel_actual.append(grupo_task)
-        nivel_anterior = nivel_actual
-    nivel_anterior >> ods_completo
+                    tareas_bds.append(task)
 
-    # ---------------- BDS: grupos + aristas del plan ------------------------
-    tareas_bds = []
-    for grupo_cfg in PLAN.bds:
-        modo = "paralelo" if grupo_cfg.get("PARALELO") else "secuencial"
-        with TaskGroup(
-            group_id=task_id_grupo("BDS", grupo_cfg["NOMBRE"]),
-            tooltip=f"BDS - {grupo_cfg['NOMBRE']} (orden {grupo_cfg.get('ORDEN', 0)}, {modo})",
-        ):
-            for proceso_cfg in grupo_cfg["PROCESOS"]:
-                pid = int(proceso_cfg["ID_PROCESO"])
-                task = crear_tarea(PLAN.nodos[pid], ejecutar_bds)
-                tareas[pid] = task
-                tareas_bds.append(task)
+        for origen, destino in PLAN.aristas_bds:
+            (ods_completo if origen == "ods_completo" else tareas[origen]) >> tareas[destino]
 
-    for origen, destino in PLAN.aristas_bds:
-        (ods_completo if origen == "ods_completo" else tareas[origen]) >> tareas[destino]
-
-    # bds_completo espera todo; fin espera solo las hojas, para que el grafo
-    # no se llene de aristas redundantes.
-    if tareas_bds:
-        tareas_bds >> bds_completo
-        hojas = [t for t in tareas_bds if not t.downstream_list]
-        (hojas or [bds_completo]) >> fin
-    else:
-        ods_completo >> bds_completo >> fin
+        # bds_completo espera a TODAS las tareas BDS, y fin cuelga de el.
+        #
+        # La version anterior intentaba ademas colgar 'fin' solo de las hojas,
+        # pero calculaba esas hojas DESPUES de enlazar bds_completo, asi que
+        # para entonces ninguna tarea estaba ya sin downstream y la lista salia
+        # siempre vacia: era codigo muerto que caia en este mismo enlace. Se
+        # quito porque, ademas, era redundante: si bds_completo ya espera a
+        # todas, colgar fin de las hojas no adelanta nada y solo llena el grafo.
+        if tareas_bds:
+            tareas_bds >> bds_completo
+        else:
+            ods_completo >> bds_completo
+        bds_completo >> fin
