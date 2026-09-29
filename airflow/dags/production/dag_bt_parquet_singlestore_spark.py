@@ -63,30 +63,60 @@ PLUGINS_FOLDER = conf.get("core", "plugins_folder", fallback="/opt/airflow/plugi
 if PLUGINS_FOLDER and PLUGINS_FOLDER not in sys.path:
     sys.path.append(PLUGINS_FOLDER)
 
+# Segundo sitio donde buscar, y el unico que no depende de la configuracion.
+#
+# plugins_folder sale de airflow.cfg o de una variable de entorno, asi que
+# apunta a donde el contenedor monta plugins/. Eso esta bien en el contenedor y
+# falla en cualquier otro sitio: un pytest local, un AIRFLOW_HOME nuevo, un
+# `airflow dags list` lanzado a mano. En todos esos casos el archivo SI esta en
+# el repositorio, y este DAG sabe donde, porque conoce su propia ruta:
+#
+#     airflow/dags/production/dag_bt_parquet_singlestore_spark.py   <- este
+#     airflow/plugins/operators/spark_operator.py                   <- el otro
+#
+# Dos niveles arriba y a plugins/. No hay configuracion que pueda equivocarse.
+RAIZ_AIRFLOW = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+PLUGINS_REPO = os.path.join(RAIZ_AIRFLOW, "plugins")
+
 
 def _cargar_operador_spark():
     """Devuelve BsgSparkJdbcOperator, venga de donde venga.
 
-    Primero el import normal. Si falla, carga el archivo directamente de
-    plugins/operators/spark_operator.py. Si tampoco esta, lanza un error que
-    dice QUE se busco y DONDE, en vez del ModuleNotFoundError pelado que
-    obliga a adivinar.
+    Primero el import normal. Si falla, carga el archivo directamente por ruta
+    absoluta, probando plugins_folder y la carpeta del repositorio. Si no esta
+    en ninguna, lanza un error que dice QUE se busco y DONDE, en vez del
+    ModuleNotFoundError pelado que obliga a adivinar.
     """
     try:
         from operators.spark_operator import BsgSparkJdbcOperator
         return BsgSparkJdbcOperator
     except ImportError as exc_import:
-        ruta = os.path.join(PLUGINS_FOLDER, "operators", "spark_operator.py")
-        if not os.path.isfile(ruta):
+        candidatas = [
+            os.path.join(carpeta, "operators", "spark_operator.py")
+            for carpeta in (PLUGINS_FOLDER, PLUGINS_REPO) if carpeta
+        ]
+        ruta = next((c for c in candidatas if os.path.isfile(c)), None)
+
+        if ruta is None:
+            buscadas = "\n".join(f"                   {c} (NO EXISTE)" for c in candidatas)
             raise AirflowException(
                 f"No se encuentra el operador Spark del proyecto.\n"
                 f"  Import fallido : from operators.spark_operator import BsgSparkJdbcOperator\n"
                 f"  Motivo         : {exc_import}\n"
-                f"  Archivo buscado: {ruta} (NO EXISTE)\n"
+                f"  Rutas buscadas :\n{buscadas}\n"
                 f"  plugins_folder : {PLUGINS_FOLDER}\n"
                 f"Revisa que el docker-compose monte ./airflow/plugins en "
                 f"{PLUGINS_FOLDER} para ESTE servicio."
             ) from exc_import
+
+        # La carpeta de plugins que de verdad contiene el archivo tiene que
+        # estar en sys.path ANTES de ejecutarlo: spark_operator.py importa a su
+        # vez "utils.spark_config", que vive a su lado. Sin esto el import por
+        # ruta encuentra el operador y muere una linea despues con un
+        # "No module named 'utils'" que despista mas todavia.
+        carpeta_plugins = os.path.dirname(os.path.dirname(ruta))
+        if carpeta_plugins not in sys.path:
+            sys.path.append(carpeta_plugins)
 
         # El archivo existe pero el nombre "operators" apunta a otro sitio.
         # Se carga por ruta, registrandolo en sys.modules con un nombre propio

@@ -1,0 +1,50 @@
+# =============================================================================
+#  Paso reutilizable: desplegar el bundle a un target
+# -----------------------------------------------------------------------------
+#  Se usa desde azure-pipelines-cd.yml. Esta aqui y no repetido en cada stage
+#  para que el dia que cambie la forma de desplegar cambie en un solo sitio.
+# =============================================================================
+
+parameters:
+  - name: target
+    type: string
+    values: [dev, qa, prod]
+  - name: tokenVar
+    type: string
+
+steps:
+
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.11'
+
+  - script: |
+      curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      databricks --version
+    displayName: 'Instalar CLI de Databricks'
+
+  # ---------------------------------------------------------------------------
+  # Validar ANTES de desplegar. bundle validate no toca nada y detecta
+  # referencias rotas, variables sin valor y recursos mal declarados. Es
+  # gratis comparado con un despliegue a medias.
+  # ---------------------------------------------------------------------------
+  - script: databricks bundle validate -t ${{ parameters.target }}
+    displayName: 'Validar el bundle (${{ parameters.target }})'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})
+
+  # ---------------------------------------------------------------------------
+  # El diff antes del deploy queda en el log del pipeline. Es la evidencia de
+  # QUE cambio en ese despliegue, y vale su peso en oro cuando hay que
+  # reconstruir que paso una semana despues.
+  # ---------------------------------------------------------------------------
+  - script: |
+      databricks bundle summary -t ${{ parameters.target }} || true
+    displayName: 'Resumen de lo que se va a desplegar'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})
+
+  - script: databricks bundle deploy -t ${{ parameters.target }}
+    displayName: 'Desplegar a ${{ parameters.target }}'
+    env:
+      DATABRICKS_TOKEN: $(${{ parameters.tokenVar }})

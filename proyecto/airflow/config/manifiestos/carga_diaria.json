@@ -1,0 +1,52 @@
+{
+  "nombre": "carga_diaria",
+  "descripcion": "Carga diaria de ventas y clientes, con consolidacion pesada en Spark",
+
+  "_comentario_bitacora": "Toda la bitacora va a esta conexion. Es la base DESTINO, no la de Airflow.",
+  "conexion_bitacora": "bd_negocio",
+  "tabla_bitacora": "airflow_bitacora_procesos",
+
+  "_comentario_pasos": "tipo=sql se ejecuta directo desde Airflow. tipo=spark se manda al cluster.",
+  "pasos": [
+    {
+      "id": "cargar_ventas",
+      "descripcion": "Carga de ventas del dia",
+      "tipo": "sql",
+      "conexion": "bd_negocio",
+      "esquema": "public",
+      "procedimiento": "sp_demo_ventas",
+      "parametros": ["{{ ds }}"]
+    },
+    {
+      "id": "cargar_clientes",
+      "descripcion": "Carga de clientes del dia",
+      "tipo": "sql",
+      "conexion": "bd_negocio",
+      "esquema": "public",
+      "procedimiento": "sp_demo_clientes",
+      "parametros": ["{{ ds }}"],
+      "depende_de": []
+    },
+    {
+      "id": "consolidar",
+      "descripcion": "Consolidacion. Va por Spark porque procesa el volumen completo.",
+      "tipo": "spark",
+      "conexion": "bd_negocio",
+      "esquema": "public",
+      "procedimiento": "sp_demo_resumen",
+      "parametros": ["{{ ds }}"],
+      "depende_de": ["cargar_ventas", "cargar_clientes"],
+
+      "_comentario_spark": "Que hace Spark DESPUES de que el procedimiento termine.",
+      "spark": {
+        "tabla_resultado": "public.ventas",
+        "columna_particion": "id",
+        "particiones": 4,
+        "salida_parquet": "/opt/spark-data/parquet/ventas",
+        "executor_memory": "1g",
+        "executor_cores": 1,
+        "num_executors": 1
+      }
+    }
+  ]
+}

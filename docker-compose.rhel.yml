@@ -90,10 +90,14 @@ x-airflow-common: &airflow-common
     # Esta ruta de contenedor es la que se guarda en CTL_PROCESO_PARQUET y la
     # que lee la carga para subir a STG: debe coincidir con output_dir de la
     # Variable EXTRACCION_BT_STG.
-    - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
-    - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+    - ${PARQUET_HOST_DIR:-./data/parquet}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
+    - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+    - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:${BT2SQL_PARQUET_CONTAINER_DIR:-/data/bt2sql}:z
     # spark-submit corre DESDE el worker de Airflow: necesita ver el .py del job
     - ./spark/jobs:/opt/spark-apps:z
+    # Sin este montaje, spark-defaults.conf existe en el repo pero NO
+    # tiene ningun efecto: el cluster corre con los valores por defecto.
+    - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro:z
     # area compartida con el cluster de Spark (parquet, checkpoints)
     - spark_data:/opt/spark-data
     # Volumen nombrado, no bind mount: ver la nota 3 de la cabecera.
@@ -206,12 +210,17 @@ services:
       - ./airflow/config:/opt/airflow/config:z
       - ./scripts:/opt/airflow/scripts:z,ro
       - ./airflow/tests:/opt/airflow/tests:z,ro
-      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
-      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${PARQUET_HOST_DIR:-./data/parquet}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:${BT2SQL_PARQUET_CONTAINER_DIR:-/data/bt2sql}:z
       - ./spark/jobs:/opt/spark-apps:z
+      # Sin este montaje, spark-defaults.conf existe en el repo pero NO
+      # tiene ningun efecto: el cluster corre con los valores por defecto.
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro:z
       - spark_data:/opt/spark-data
-      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
-      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${PARQUET_HOST_DIR:-./data/parquet}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:${BT2SQL_PARQUET_CONTAINER_DIR:-/data/bt2sql}:z
       - airflow_logs:/opt/airflow/logs
       # Configuracion de autenticacion de la UI. Airflow lo busca justo aqui.
       # Si el archivo no existe en el host, Docker crea una CARPETA con ese
@@ -359,10 +368,14 @@ services:
       SPARK_PUBLIC_DNS: spark-master
     volumes:
       - ./spark/jobs:/opt/spark-apps:z
+      # Sin este montaje, spark-defaults.conf existe en el repo pero NO
+      # tiene ningun efecto: el cluster corre con los valores por defecto.
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro:z
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
-      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
-      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${PARQUET_HOST_DIR:-./data/parquet}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:${BT2SQL_PARQUET_CONTAINER_DIR:-/data/bt2sql}:z
     ports:
       - "${SPARK_MASTER_UI_PORT:-8082}:8080"   # UI  (8082 para no chocar con Airflow)
       - "${SPARK_MASTER_PORT:-7077}:7077"      # submit
@@ -371,6 +384,51 @@ services:
     # siempre por el depends_on. Esta prueba usa solo bash: abre un socket TCP.
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8080' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      spark-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow-network
+    restart: unless-stopped
+    logging: *default-logging
+
+
+  # --------------------------------------------------------------------------
+  # SPARK HISTORY SERVER
+  # --------------------------------------------------------------------------
+  # Sin esto, la interfaz de un job DESAPARECE en cuanto termina, y la pregunta
+  # "por que tardo tanto el proceso de anoche" no tiene forma de contestarse:
+  # hay que volver a ejecutarlo y mirarlo en vivo.
+  #
+  # Se vuelve obligatorio ahora que spark-defaults.conf activa eventLog. Sin un
+  # lector, esos eventos solo llenarian el volumen spark_events para siempre.
+  # Por eso ademas se activa el cleaner, con 30 dias de retencion.
+  #
+  #     http://localhost:18080
+  # --------------------------------------------------------------------------
+  spark-history:
+    image: ${SPARK_IMAGE:-apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
+    container_name: spark-history
+    entrypoint: ["/opt/spark/bin/spark-class"]
+    command:
+      - org.apache.spark.deploy.history.HistoryServer
+    environment:
+      SPARK_HISTORY_OPTS: >-
+        -Dspark.history.fs.logDirectory=/opt/spark-events
+        -Dspark.history.fs.cleaner.enabled=true
+        -Dspark.history.fs.cleaner.maxAge=30d
+        -Dspark.history.ui.port=18080
+    volumes:
+      - spark_events:/opt/spark-events:z
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro:z
+    ports:
+      - "${SPARK_HISTORY_PORT:-18080}:18080"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/18080' || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 10
@@ -408,10 +466,14 @@ services:
       SPARK_WORKER_OPTS: ${SPARK_WORKER_OPTS:-}
     volumes:
       - ./spark/jobs:/opt/spark-apps:z
+      # Sin este montaje, spark-defaults.conf existe en el repo pero NO
+      # tiene ningun efecto: el cluster corre con los valores por defecto.
+      - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro:z
       - spark_events:/opt/spark-events
       - spark_data:/opt/spark-data
-      - ${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
-      - ${S2SQL_PARQUET_HOST_DIR}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${PARQUET_HOST_DIR:-./data/parquet}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:${S2SQL_PARQUET_CONTAINER_DIR:-/data/s2sql}:z
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:${BT2SQL_PARQUET_CONTAINER_DIR:-/data/bt2sql}:z
     healthcheck:
       test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/localhost/8081' || exit 1"]
       interval: 15s

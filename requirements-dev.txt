@@ -1,0 +1,53 @@
+# ============================================================================
+#  Dependencias de DESARROLLO y de CI
+# ----------------------------------------------------------------------------
+#  NO son las de la imagen. La imagen instala lo que necesita para EJECUTAR
+#  (ver Dockerfile); esto es lo que se necesita para DESARROLLAR y para que el
+#  pipeline de CI valide un pull request.
+#
+#  Lo referencia .azure-pipelines/ci.yml (plantilla en
+#  docs/propuesta-ingenieria-datos/plantillas/azure-pipelines-ci.yml).
+#
+#  Uso en local:
+#      python -m venv .venv && . .venv/bin/activate
+#      pip install -r requirements-dev.txt
+#      AIRFLOW_HOME=/tmp/af pytest airflow/tests/unit -v
+#
+#  OJO con requirements.txt de la raiz: esta guardado en UTF-16 y el Dockerfile
+#  NO lo usa. Las versiones que de verdad corren en la imagen salen del propio
+#  Dockerfile con el archivo de constraints de Apache. Editar aquel archivo no
+#  cambia la imagen.
+# ============================================================================
+
+# --- Airflow, para poder cargar el DagBag en las pruebas --------------------
+# La version DEBE coincidir con la de la imagen (AIRFLOW_VERSION del
+# Dockerfile). Si no, las pruebas validan contra una API distinta de la que
+# corre en produccion, que es peor que no probar.
+apache-airflow==2.11.2
+
+# --- Pruebas ----------------------------------------------------------------
+pytest==8.3.4
+pytest-cov==6.0.0
+
+# --- Librerias que las pruebas necesitan de verdad ---------------------------
+# El parquet de las pruebas se escribe y se lee con pyarrow real: es donde
+# aparecen los problemas de tipos, y simularlos no serviria de nada.
+pandas
+pyarrow
+PyYAML
+
+# --- Calidad de codigo ------------------------------------------------------
+# Las tres etapas 1 del pipeline de CI. Corren en el agente, no en la imagen.
+ruff==0.8.4
+black==24.10.0
+sqlfluff==3.2.5
+mypy==1.13.0
+
+# --- NO se instalan aqui a proposito ---------------------------------------
+# singlestoredb, pyodbc, jaydebeapi e ibm-db necesitan librerias del sistema
+# (unixODBC, una JVM, el cliente de IBM) que no tienen por que estar en la
+# maquina de quien desarrolla. Las pruebas unitarias los sustituyen por dobles
+# y las de integracion corren dentro del contenedor, que si los trae.
+#
+# Si necesita ejecutar algo que los use en local, instalelos a mano:
+#     pip install singlestoredb pyodbc jaydebeapi

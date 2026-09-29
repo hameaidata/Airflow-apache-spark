@@ -1,0 +1,164 @@
+# =============================================================================
+# CAPA TLS  ::  Nginx como proxy inverso delante de Airflow, Spark y Flower
+# -----------------------------------------------------------------------------
+# Es un archivo de SUPERPOSICION. No sustituye a ningun compose: se suma al que
+# corresponda a su sistema. Funciona igual con los tres.
+#
+#   Windows:  docker compose -f docker-compose.windows.yml -f docker-compose.tls.yml up -d
+#   Ubuntu:   docker compose -f docker-compose.ubuntu.yml  -f docker-compose.tls.yml up -d
+#   RHEL:     docker compose -f docker-compose.rhel.yml    -f docker-compose.tls.yml up -d
+#
+# Se hizo asi a proposito: los tres compose ya funcionan y estan probados. Un
+# archivo aparte anade TLS sin tocar ni una linea de ellos, y se quita con solo
+# no incluirlo.
+#
+# -----------------------------------------------------------------------------
+# ANTES DE LEVANTARLO HACEN FALTA TRES COSAS
+#
+#   1. El certificado firmado por el banco en  tls/plataforma.crt
+#      (y la clave en tls/plataforma.key, que genero generar_csr.sh)
+#          ./scripts/generar_csr.sh --dominio bsg.banco.local
+#          ./scripts/instalar_certificado.sh --cert <firmado> --cadena <ca>
+#
+#   2. Estas variables en su .env:
+#          DOMINIO_AIRFLOW=airflow.bsg.banco.local
+#          DOMINIO_SPARK=spark.bsg.banco.local
+#          DOMINIO_FLOWER=flower.bsg.banco.local
+#
+#   3. Las tres entradas de DNS apuntando a este servidor.
+#
+# -----------------------------------------------------------------------------
+# CERRAR LAS PUERTAS TRASERAS
+#
+# Poner nginx delante no sirve de nada si los puertos 8080, 5555 y 8082 siguen
+# abiertos a toda la red: cualquiera los usa y se salta el TLS.
+#
+# NO hace falta editar ningun compose para cerrarlos. Las variables de puerto
+# admiten una direccion delante, asi que basta con esto en el .env:
+#
+#     AIRFLOW_WEB_PORT=127.0.0.1:8080
+#     FLOWER_PORT=127.0.0.1:5555
+#     SPARK_MASTER_UI_PORT=127.0.0.1:8082
+#
+# Quedan accesibles desde el propio servidor -util para diagnosticar- y
+# cerrados desde fuera. La unica entrada por red pasa a ser el 443.
+# =============================================================================
+
+services:
+
+  # ==========================================================================
+  # NGINX
+  # ==========================================================================
+  nginx:
+    # 1.27 y no 'latest'. La directiva  http2 on;  que usa la configuracion
+    # existe a partir de nginx 1.25.1; en 1.24 el arranque falla con
+    # 'unknown directive "http2"'. Comprobado.
+    image: ${NGINX_IMAGE:-nginx:1.27-alpine}
+    container_name: nginx-tls
+    restart: unless-stopped
+
+    ports:
+      - "${HTTPS_PORT:-443}:443"
+      # El 80 solo sirve para redirigir a HTTPS. Si la politica del banco
+      # prohibe escuchar en claro aunque sea para redirigir, comente esta
+      # linea: todo lo demas sigue funcionando.
+      - "${HTTP_PORT:-80}:80"
+
+    environment:
+      # Los tres nombres de host. La plantilla los sustituye al arrancar.
+      DOMINIO_AIRFLOW: ${DOMINIO_AIRFLOW:-airflow.bsg.banco.local}
+      DOMINIO_SPARK:   ${DOMINIO_SPARK:-spark.bsg.banco.local}
+      DOMINIO_FLOWER:  ${DOMINIO_FLOWER:-flower.bsg.banco.local}
+
+      # EL FILTRO ES IMPRESCINDIBLE.
+      # La imagen de nginx pasa envsubst sobre las plantillas, y sin filtro
+      # sustituye TAMBIEN $host, $remote_addr, $scheme... que son variables de
+      # nginx. Quedarian vacias y el proxy dejaria de funcionar de formas muy
+      # dificiles de diagnosticar. Con el filtro, solo se tocan las DOMINIO_*.
+      NGINX_ENVSUBST_FILTER: "^DOMINIO_"
+
+    volumes:
+      # Plantilla de configuracion. La imagen la procesa y la deja en conf.d/.
+      - ./nginx/templates:/etc/nginx/templates:ro
+      # Escribe la directiva resolver leyendo el DNS del propio contenedor.
+      # Sin esto, nginx resuelve los nombres al arrancar y no levanta si los
+      # backends aun no existen.
+      - ./nginx/docker-entrypoint.d/10-resolver.sh:/docker-entrypoint.d/10-resolver.sh:ro
+      # Certificado y clave. Solo lectura: nginx no tiene por que escribirlos.
+      - ./tls:/etc/nginx/tls:ro
+
+    depends_on:
+      - airflow-webserver
+      - airflow-flower
+      - spark-master
+
+    networks:
+      - airflow-network
+
+    healthcheck:
+      # Se comprueba contra el 80, que no necesita certificado valido. Probar
+      # el 443 obligaria a lidiar con la validacion del nombre desde dentro
+      # del contenedor, que no aporta nada a saber si nginx esta vivo.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost/ 2>/dev/null || [ $$? -eq 8 ]"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  # ==========================================================================
+  # AIRFLOW DETRAS DEL PROXY
+  # ==========================================================================
+  airflow-webserver:
+    environment:
+      # BASE_URL: la direccion por la que los usuarios ven Airflow. Airflow la
+      # usa para construir enlaces absolutos y redirecciones.
+      #
+      # OJO: NO puede terminar en barra. Airflow lanza
+      #     AirflowConfigException: webserver.base_url conf cannot have a
+      #     trailing slash
+      # y el webserver no arranca. Comprobado en el codigo de 2.11.2.
+      AIRFLOW__WEBSERVER__BASE_URL: "https://${DOMINIO_AIRFLOW:-airflow.bsg.banco.local}"
+
+      # Sin esto, Airflow ignora las cabeceras X-Forwarded-* que envia nginx y
+      # cree que la peticion llego por HTTP al puerto 8080. Genera entonces
+      # enlaces http://... que el navegador bloquea por contenido mixto: se ve
+      # el HTML pero no el CSS ni el JavaScript, y la interfaz parece rota.
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "True"
+
+      # Cuantas capas de proxy hay delante. Aqui hay UNA -nginx-, asi que 1.
+      # Poner un numero mayor que el de proxies reales permite que un cliente
+      # falsifique su propia IP inyectando cabeceras X-Forwarded-For.
+      AIRFLOW__WEBSERVER__PROXY_FIX_X_FOR: "1"
+      AIRFLOW__WEBSERVER__PROXY_FIX_X_PROTO: "1"
+      AIRFLOW__WEBSERVER__PROXY_FIX_X_HOST: "1"
+      AIRFLOW__WEBSERVER__PROXY_FIX_X_PORT: "1"
+      AIRFLOW__WEBSERVER__PROXY_FIX_X_PREFIX: "1"
+
+      # La cookie de sesion solo viaja por HTTPS y no es accesible desde
+      # JavaScript. Con TLS delante ya no hay razon para menos.
+      AIRFLOW__WEBSERVER__COOKIE_SECURE: "True"
+      AIRFLOW__WEBSERVER__COOKIE_SAMESITE: "Lax"
+
+  # ==========================================================================
+  # SPARK DETRAS DEL PROXY
+  # ==========================================================================
+  # spark-defaults.conf lo genera scripts/generar_csr.sh con el dominio real.
+  # Lleva spark.ui.reverseProxy y spark.ui.reverseProxyUrl, que DEBEN estar
+  # puestas igual en el master y en todos los workers: si difieren, los
+  # enlaces de la interfaz apuntan a nombres internos del contenedor que el
+  # navegador no resuelve.
+  #
+  # Va como archivo montado y no como variable de entorno porque el master y
+  # los workers leen spark-defaults.conf siempre, mientras que el paso de
+  # opciones por entorno depende de como arranque cada daemon.
+  spark-master:
+    volumes:
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+
+  spark-worker:
+    volumes:
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro

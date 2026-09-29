@@ -1,0 +1,454 @@
+-- Version productiva propuesta para BDS.sp_cargar_saldos_operativos_hb.
+-- Mantiene la intencion del SQL original y agrega una malla calendario por
+-- ID_OPERACION_CIERRE para garantizar la misma cantidad de fechas por operacion
+-- dentro del rango cargado.
+
+DELIMITER //
+
+CREATE OR REPLACE PROCEDURE BDS.sp_cargar_saldos_operativos_hb(
+    IN p_fecha_proceso DATE,
+    IN p_dias INT
+)
+AS
+BEGIN
+    DECLARE v_fecha_calculada DATE;
+    DECLARE v_fecha_inicio DATE;
+    DECLARE v_fecha_inicio_mes DATE;
+    DECLARE v_fecha_fin DATE;
+    DECLARE v_dias_esperados INT;
+
+    SET v_fecha_calculada = DATE_SUB(p_fecha_proceso, INTERVAL p_dias DAY);
+    SET v_fecha_fin = p_fecha_proceso;
+    SET v_fecha_inicio_mes = DATE_FORMAT(v_fecha_calculada, '%Y-%m-01');
+
+    SELECT MAX(C.FEC_CALENDARIO)
+      INTO v_fecha_inicio
+    FROM BDS_CALENDARIOS C
+    WHERE C.COD_CALENDARIO = 1
+      AND C.IND_DIA_HABIL = 'S'
+      AND C.FEC_CALENDARIO <= v_fecha_calculada;
+
+    IF v_fecha_inicio IS NULL THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'No se pudo calcular v_fecha_inicio desde BDS_CALENDARIOS';
+    END IF;
+
+    SET v_dias_esperados = DATEDIFF(v_fecha_fin, v_fecha_inicio_mes) + 1;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_calendario_global;
+    CREATE TEMPORARY TABLE tmp_calendario_global AS
+    SELECT
+        cal.FEC_CALENDARIO AS FECHA_PROCESO,
+        cal.IND_DIA_HABIL,
+        MAX(hab.FEC_CALENDARIO) AS FECHA_ORIGEN
+    FROM BDS_CALENDARIOS cal
+    JOIN BDS_CALENDARIOS hab
+      ON hab.COD_CALENDARIO = cal.COD_CALENDARIO
+     AND hab.IND_DIA_HABIL = 'S'
+     AND hab.FEC_CALENDARIO <= cal.FEC_CALENDARIO
+    WHERE cal.COD_CALENDARIO = 1
+      AND cal.FEC_CALENDARIO BETWEEN DATE_FORMAT(v_fecha_inicio, '%Y-%m-01') AND v_fecha_fin
+    GROUP BY cal.FEC_CALENDARIO, cal.IND_DIA_HABIL;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_base_calendario;
+    CREATE TEMPORARY TABLE tmp_base_calendario AS
+    SELECT
+        CONCAT(
+            s.COD_EMPRESA, '|',
+            s.COD_MODULO, '|',
+            s.COD_SUCURSAL, '|',
+            s.COD_MONEDA, '|',
+            s.COD_PAPEL, '|',
+            s.NUM_CUENTA_BT, '|',
+            s.COD_OPERACION, '|',
+            s.COD_SUB_OPERACION, '|',
+            s.COD_TIPO_OPERACION
+        ) AS ID_OPERACION_CIERRE,
+        c.FECHA_PROCESO,
+        s.COD_EMPRESA,
+        s.COD_SUCURSAL,
+        s.COD_RUBRO,
+        s.COD_MONEDA,
+        s.COD_PAPEL,
+        s.NUM_CUENTA_BT,
+        s.COD_OPERACION,
+        s.COD_SUB_OPERACION,
+        s.COD_TIPO_OPERACION,
+        s.COD_MODULO,
+        s.FEC_VENCIMIENTO,
+        s.FEC_VALOR,
+        s.IND_CATEGORIA_RIESGO,
+        s.COD_ACTI_BCO_CENTRAL,
+        s.COD_PRODUCTO,
+        s.MTO_SALDO_ORIGEN,
+        s.MTO_SALDO_MN,
+        s.MTO_SALDO_ME,
+        s.MTO_SALDO_MO,
+        s.MTO_INTERES,
+        s.MTO_PREVISIONES,
+        c.IND_DIA_HABIL,
+        CASE
+            WHEN c.FECHA_PROCESO = c.FECHA_ORIGEN THEN 'ORIGINAL'
+            ELSE 'COPIA_HABIL'
+        END AS TIPO_ORIGEN,
+        s.FUENTE,
+        s.FECHA_CARGA,
+        s.BATCH_ID
+    FROM tmp_calendario_global c
+    JOIN BDS_SALDOS_CIERRE s
+      ON s.FECHA_PROCESO = c.FECHA_ORIGEN
+    WHERE s.FECHA_PROCESO BETWEEN v_fecha_inicio AND v_fecha_fin;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_base_deduplicada;
+    CREATE TEMPORARY TABLE tmp_base_deduplicada AS
+    WITH ranked AS (
+        SELECT
+            b.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY
+                    b.ID_OPERACION_CIERRE,
+                    b.FECHA_PROCESO,
+                    b.COD_RUBRO
+                ORDER BY
+                    CASE WHEN b.TIPO_ORIGEN = 'ORIGINAL' THEN 0 ELSE 1 END,
+                    CASE
+                        WHEN COALESCE(b.MTO_SALDO_ORIGEN, 0) <> 0
+                          OR COALESCE(b.MTO_SALDO_MN, 0) <> 0
+                          OR COALESCE(b.MTO_SALDO_ME, 0) <> 0
+                          OR COALESCE(b.MTO_SALDO_MO, 0) <> 0
+                        THEN 0 ELSE 1
+                    END,
+                    b.FECHA_CARGA DESC,
+                    b.BATCH_ID DESC
+            ) AS rn
+        FROM tmp_base_calendario b
+    )
+    SELECT
+        ID_OPERACION_CIERRE,
+        FECHA_PROCESO,
+        COD_EMPRESA,
+        COD_SUCURSAL,
+        COD_RUBRO,
+        COD_MONEDA,
+        COD_PAPEL,
+        NUM_CUENTA_BT,
+        COD_OPERACION,
+        COD_SUB_OPERACION,
+        COD_TIPO_OPERACION,
+        COD_MODULO,
+        FEC_VENCIMIENTO,
+        FEC_VALOR,
+        IND_CATEGORIA_RIESGO,
+        COD_ACTI_BCO_CENTRAL,
+        COD_PRODUCTO,
+        MTO_SALDO_ORIGEN,
+        MTO_SALDO_MN,
+        MTO_SALDO_ME,
+        MTO_SALDO_MO,
+        MTO_INTERES,
+        MTO_PREVISIONES,
+        IND_DIA_HABIL,
+        TIPO_ORIGEN,
+        FUENTE,
+        FECHA_CARGA,
+        BATCH_ID
+    FROM ranked
+    WHERE rn = 1;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_operaciones;
+    CREATE TEMPORARY TABLE tmp_operaciones AS
+    SELECT DISTINCT ID_OPERACION_CIERRE
+    FROM tmp_base_deduplicada
+    WHERE FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_operacion_fecha;
+    CREATE TEMPORARY TABLE tmp_operacion_fecha AS
+    SELECT
+        o.ID_OPERACION_CIERRE,
+        c.FECHA_PROCESO,
+        c.IND_DIA_HABIL
+    FROM tmp_operaciones o
+    CROSS JOIN tmp_calendario_global c
+    WHERE c.FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_atributos_operacion;
+    CREATE TEMPORARY TABLE tmp_atributos_operacion AS
+    WITH ranked AS (
+        SELECT
+            b.*,
+            ROW_NUMBER() OVER (
+                PARTITION BY b.ID_OPERACION_CIERRE
+                ORDER BY b.FECHA_PROCESO DESC, b.FECHA_CARGA DESC, b.BATCH_ID DESC
+            ) AS rn
+        FROM tmp_base_deduplicada b
+        WHERE b.TIPO_ORIGEN = 'ORIGINAL'
+    )
+    SELECT
+        ID_OPERACION_CIERRE,
+        COD_EMPRESA,
+        COD_SUCURSAL,
+        COD_MONEDA,
+        COD_PAPEL,
+        NUM_CUENTA_BT,
+        COD_OPERACION,
+        COD_SUB_OPERACION,
+        COD_TIPO_OPERACION,
+        COD_MODULO,
+        FEC_VENCIMIENTO,
+        FEC_VALOR,
+        IND_CATEGORIA_RIESGO,
+        COD_ACTI_BCO_CENTRAL,
+        FUENTE,
+        FECHA_CARGA,
+        BATCH_ID
+    FROM ranked
+    WHERE rn = 1;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_rubro_enriquecido;
+    CREATE TEMPORARY TABLE tmp_rubro_enriquecido AS
+    SELECT
+        ID_OPERACION_CIERRE,
+        FECHA_PROCESO,
+        COD_RUBRO,
+        SUM(MTO_SALDO_ORIGEN) AS MTO_SALDO_ORIGEN,
+        SUM(MTO_SALDO_MN) AS MTO_SALDO_MN,
+        SUM(MTO_SALDO_ME) AS MTO_SALDO_ME,
+        SUM(MTO_SALDO_MO) AS MTO_SALDO_MO,
+        SUM(MTO_INTERES) AS MTO_INTERES,
+        SUM(MTO_PREVISIONES) AS MTO_PREVISIONES,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1401', '1411', '1421')
+                 THEN MTO_SALDO_MO ELSE 0 END) AS MTO_SALDO_VIGENTE_MO,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1403', '1413', '1423')
+                 THEN MTO_SALDO_MO ELSE 0 END) AS MTO_SALDO_RESTRUCTURADO_MO,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1404', '1414', '1424')
+                 THEN MTO_SALDO_MO ELSE 0 END) AS MTO_SALDO_REFINANCIADO_MO,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1405', '1415', '1425')
+                 THEN MTO_SALDO_MO ELSE 0 END) AS MTO_SALDO_VENCIDO_MO,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1406', '1416', '1426')
+                 THEN MTO_SALDO_MO ELSE 0 END) AS MTO_SALDO_JUDIAL_MO,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1401', '1411', '1421')
+                 THEN MTO_SALDO_MN ELSE 0 END) AS MTO_SALDO_VIGENTE_MN,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1403', '1413', '1423')
+                 THEN MTO_SALDO_MN ELSE 0 END) AS MTO_SALDO_RESTRUCTURADO_MN,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1404', '1414', '1424')
+                 THEN MTO_SALDO_MN ELSE 0 END) AS MTO_SALDO_REFINANCIADO_MN,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1405', '1415', '1425')
+                 THEN MTO_SALDO_MN ELSE 0 END) AS MTO_SALDO_VENCIDO_MN,
+        SUM(CASE WHEN LEFT(COD_RUBRO, 4) IN ('1406', '1416', '1426')
+                 THEN MTO_SALDO_MN ELSE 0 END) AS MTO_SALDO_JUDIAL_MN
+    FROM tmp_base_deduplicada
+    WHERE FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin
+    GROUP BY ID_OPERACION_CIERRE, FECHA_PROCESO, COD_RUBRO;
+
+    DROP TEMPORARY TABLE IF EXISTS tmp_operacion_dia;
+    CREATE TEMPORARY TABLE tmp_operacion_dia AS
+    SELECT
+        f.ID_OPERACION_CIERRE,
+        f.FECHA_PROCESO,
+        DAY(f.FECHA_PROCESO) AS NUM_DIA_MES,
+        DAY(LAST_DAY(f.FECHA_PROCESO)) AS TOTAL_DIAS_MES,
+        a.COD_EMPRESA,
+        a.COD_SUCURSAL,
+        a.COD_MONEDA,
+        a.COD_PAPEL,
+        a.NUM_CUENTA_BT,
+        a.COD_OPERACION,
+        a.COD_SUB_OPERACION,
+        a.COD_TIPO_OPERACION,
+        a.COD_MODULO,
+        a.FEC_VENCIMIENTO,
+        a.FEC_VALOR,
+        a.IND_CATEGORIA_RIESGO,
+        a.COD_ACTI_BCO_CENTRAL,
+        COALESCE(SUM(r.MTO_SALDO_ORIGEN), 0) AS TOTAL_DIA_SALDO_ORIGEN,
+        COALESCE(SUM(r.MTO_SALDO_MN), 0) AS TOTAL_DIA_SALDO_MN,
+        COALESCE(SUM(r.MTO_SALDO_ME), 0) AS TOTAL_DIA_SALDO_ME,
+        COALESCE(SUM(r.MTO_SALDO_MO), 0) AS TOTAL_DIA_SALDO_MO,
+        COALESCE(SUM(r.MTO_INTERES), 0) AS TOTAL_DIA_INTERES,
+        COALESCE(SUM(r.MTO_PREVISIONES), 0) AS TOTAL_DIA_PREVISIONES,
+        COALESCE(SUM(r.MTO_SALDO_VIGENTE_MO), 0) AS TOTAL_DIA_SALDO_VIGENTE_MO,
+        COALESCE(SUM(r.MTO_SALDO_RESTRUCTURADO_MO), 0) AS TOTAL_DIA_SALDO_RESTRUCTURADO_MO,
+        COALESCE(SUM(r.MTO_SALDO_REFINANCIADO_MO), 0) AS TOTAL_DIA_SALDO_REFINANCIADO_MO,
+        COALESCE(SUM(r.MTO_SALDO_VENCIDO_MO), 0) AS TOTAL_DIA_SALDO_VENCIDO_MO,
+        COALESCE(SUM(r.MTO_SALDO_JUDIAL_MO), 0) AS TOTAL_DIA_SALDO_JUDIAL_MO,
+        COALESCE(SUM(r.MTO_SALDO_VIGENTE_MN), 0) AS TOTAL_DIA_SALDO_VIGENTE_MN,
+        COALESCE(SUM(r.MTO_SALDO_RESTRUCTURADO_MN), 0) AS TOTAL_DIA_SALDO_RESTRUCTURADO_MN,
+        COALESCE(SUM(r.MTO_SALDO_REFINANCIADO_MN), 0) AS TOTAL_DIA_SALDO_REFINANCIADO_MN,
+        COALESCE(SUM(r.MTO_SALDO_VENCIDO_MN), 0) AS TOTAL_DIA_SALDO_VENCIDO_MN,
+        COALESCE(SUM(r.MTO_SALDO_JUDIAL_MN), 0) AS TOTAL_DIA_SALDO_JUDIAL_MN,
+        a.FUENTE,
+        f.IND_DIA_HABIL,
+        a.FECHA_CARGA,
+        a.BATCH_ID
+    FROM tmp_operacion_fecha f
+    JOIN tmp_atributos_operacion a
+      ON a.ID_OPERACION_CIERRE = f.ID_OPERACION_CIERRE
+    LEFT JOIN tmp_rubro_enriquecido r
+      ON r.ID_OPERACION_CIERRE = f.ID_OPERACION_CIERRE
+     AND r.FECHA_PROCESO = f.FECHA_PROCESO
+    GROUP BY
+        f.ID_OPERACION_CIERRE,
+        f.FECHA_PROCESO,
+        f.IND_DIA_HABIL,
+        a.COD_EMPRESA,
+        a.COD_SUCURSAL,
+        a.COD_MONEDA,
+        a.COD_PAPEL,
+        a.NUM_CUENTA_BT,
+        a.COD_OPERACION,
+        a.COD_SUB_OPERACION,
+        a.COD_TIPO_OPERACION,
+        a.COD_MODULO,
+        a.FEC_VENCIMIENTO,
+        a.FEC_VALOR,
+        a.IND_CATEGORIA_RIESGO,
+        a.COD_ACTI_BCO_CENTRAL,
+        a.FUENTE,
+        a.FECHA_CARGA,
+        a.BATCH_ID;
+
+    DELETE FROM BDS_SALDOS_OPERATIVOS_HB
+    WHERE FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin;
+
+    INSERT INTO BDS_SALDOS_OPERATIVOS_HB (
+        ID_OPERACION_CIERRE,
+        FECHA_PROCESO,
+        COD_EMPRESA,
+        COD_SUCURSAL,
+        COD_MONEDA,
+        COD_PAPEL,
+        NUM_CUENTA_BT,
+        COD_OPERACION,
+        COD_SUB_OPERACION,
+        COD_TIPO_OPERACION,
+        COD_MODULO,
+        FEC_VENCIMIENTO,
+        FEC_VALOR,
+        IND_CATEGORIA_RIESGO,
+        COD_ACTI_BCO_CENTRAL,
+        TOTAL_DIAS_MES,
+        TOTAL_DIA_SALDO_ORIGEN,
+        TOTAL_DIA_SALDO_MN,
+        TOTAL_DIA_SALDO_ME,
+        TOTAL_DIA_SALDO_MO,
+        TOTAL_DIA_INTERES,
+        TOTAL_DIA_PREVISIONES,
+        TOTAL_DIA_SALDO_VIGENTE_MO,
+        TOTAL_DIA_SALDO_RESTRUCTURADO_MO,
+        TOTAL_DIA_SALDO_REFINANCIADO_MO,
+        TOTAL_DIA_SALDO_VENCIDO_MO,
+        TOTAL_DIA_SALDO_JUDIAL_MO,
+        TOTAL_DIA_SALDO_VIGENTE_MN,
+        TOTAL_DIA_SALDO_RESTRUCTURADO_MN,
+        TOTAL_DIA_SALDO_REFINANCIADO_MN,
+        TOTAL_DIA_SALDO_VENCIDO_MN,
+        TOTAL_DIA_SALDO_JUDIAL_MN,
+        AVG_SALDO_ORIGEN,
+        AVG_SALDO_MN,
+        AVG_SALDO_ME,
+        AVG_SALDO_MO,
+        AVG_INTERES,
+        AVG_PREVISIONES,
+        AVG_SALDO_VIGENTE_MO,
+        AVG_SALDO_RESTRUCTURADO_MO,
+        AVG_SALDO_REFINANCIADO_MO,
+        AVG_SALDO_VENCIDO_MO,
+        AVG_SALDO_JUDIAL_MO,
+        AVG_SALDO_VIGENTE_MN,
+        AVG_SALDO_RESTRUCTURADO_MN,
+        AVG_SALDO_REFINANCIADO_MN,
+        AVG_SALDO_VENCIDO_MN,
+        AVG_SALDO_JUDIAL_MN,
+        FUENTE,
+        IND_DIA_HABIL,
+        FECHA_CARGA,
+        BATCH_ID
+    )
+    SELECT
+        ID_OPERACION_CIERRE,
+        FECHA_PROCESO,
+        COD_EMPRESA,
+        COD_SUCURSAL,
+        COD_MONEDA,
+        COD_PAPEL,
+        NUM_CUENTA_BT,
+        COD_OPERACION,
+        COD_SUB_OPERACION,
+        COD_TIPO_OPERACION,
+        COD_MODULO,
+        FEC_VENCIMIENTO,
+        FEC_VALOR,
+        IND_CATEGORIA_RIESGO,
+        COD_ACTI_BCO_CENTRAL,
+        TOTAL_DIAS_MES,
+        TOTAL_DIA_SALDO_ORIGEN,
+        TOTAL_DIA_SALDO_MN,
+        TOTAL_DIA_SALDO_ME,
+        TOTAL_DIA_SALDO_MO,
+        TOTAL_DIA_INTERES,
+        TOTAL_DIA_PREVISIONES,
+        TOTAL_DIA_SALDO_VIGENTE_MO,
+        TOTAL_DIA_SALDO_RESTRUCTURADO_MO,
+        TOTAL_DIA_SALDO_REFINANCIADO_MO,
+        TOTAL_DIA_SALDO_VENCIDO_MO,
+        TOTAL_DIA_SALDO_JUDIAL_MO,
+        TOTAL_DIA_SALDO_VIGENTE_MN,
+        TOTAL_DIA_SALDO_RESTRUCTURADO_MN,
+        TOTAL_DIA_SALDO_REFINANCIADO_MN,
+        TOTAL_DIA_SALDO_VENCIDO_MN,
+        TOTAL_DIA_SALDO_JUDIAL_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_ORIGEN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_ORIGEN,
+        CAST(SUM(TOTAL_DIA_SALDO_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_ME) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_ME,
+        CAST(SUM(TOTAL_DIA_SALDO_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_MO,
+        CAST(SUM(TOTAL_DIA_INTERES) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_INTERES,
+        CAST(SUM(TOTAL_DIA_PREVISIONES) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_PREVISIONES,
+        CAST(SUM(TOTAL_DIA_SALDO_VIGENTE_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_VIGENTE_MO,
+        CAST(SUM(TOTAL_DIA_SALDO_RESTRUCTURADO_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_RESTRUCTURADO_MO,
+        CAST(SUM(TOTAL_DIA_SALDO_REFINANCIADO_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_REFINANCIADO_MO,
+        CAST(SUM(TOTAL_DIA_SALDO_VENCIDO_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_VENCIDO_MO,
+        CAST(SUM(TOTAL_DIA_SALDO_JUDIAL_MO) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_JUDIAL_MO,
+        CAST(SUM(TOTAL_DIA_SALDO_VIGENTE_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_VIGENTE_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_RESTRUCTURADO_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_RESTRUCTURADO_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_REFINANCIADO_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_REFINANCIADO_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_VENCIDO_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_VENCIDO_MN,
+        CAST(SUM(TOTAL_DIA_SALDO_JUDIAL_MN) OVER w / NUM_DIA_MES AS DECIMAL(18, 4)) AS AVG_SALDO_JUDIAL_MN,
+        FUENTE,
+        IND_DIA_HABIL,
+        FECHA_CARGA,
+        BATCH_ID
+    FROM tmp_operacion_dia
+    WINDOW w AS (
+        PARTITION BY ID_OPERACION_CIERRE, YEAR(FECHA_PROCESO), MONTH(FECHA_PROCESO)
+        ORDER BY FECHA_PROCESO
+    );
+
+    IF EXISTS (
+        SELECT 1
+        FROM BDS_SALDOS_OPERATIVOS_HB
+        WHERE FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin
+        GROUP BY ID_OPERACION_CIERRE, FECHA_PROCESO
+        HAVING COUNT(*) > 1
+        LIMIT 1
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Control duplicados fallo: existe mas de una fila por ID_OPERACION_CIERRE y FECHA_PROCESO';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM (
+            SELECT ID_OPERACION_CIERRE, COUNT(*) AS total_fechas
+            FROM BDS_SALDOS_OPERATIVOS_HB
+            WHERE FECHA_PROCESO BETWEEN v_fecha_inicio_mes AND v_fecha_fin
+            GROUP BY ID_OPERACION_CIERRE
+            HAVING COUNT(*) <> v_dias_esperados
+            LIMIT 1
+        ) q
+    ) THEN
+        SIGNAL SQLSTATE '45000'
+            SET MESSAGE_TEXT = 'Control completitud fallo: no todas las operaciones tienen la cantidad esperada de fechas';
+    END IF;
+END //
+
+DELIMITER ;

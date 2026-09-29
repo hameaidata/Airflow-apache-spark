@@ -1,0 +1,53 @@
+# ============================================================================
+#  .airflowignore  -  que NO debe parsear el DagBag
+# ============================================================================
+#
+#  Airflow recorre recursivamente airflow/dags/ e IMPORTA todo .py que
+#  encuentre, cada dag_dir_list_interval (30s por defecto). Los patrones de
+#  abajo son regex (no glob) y se evaluan contra la ruta relativa a este
+#  directorio.
+#
+#  Esto arregla dos cosas concretas:
+#
+#  1) DAGs DUPLICADOS
+#     table_ods.py y table_bds.py definen sus propios DAGs a nivel de modulo
+#     (ODS_PROCESOS_DATAHUB y BDS_PROCESOS_DATAHUB). Pero dag_bt_datahub.py
+#     ya los carga con importlib para armar BT_DATAHUB, que orquesta ODS y
+#     BDS juntos con las dependencias declaradas.
+#     Resultado sin este archivo: los mismos stored procedures aparecen en
+#     tres DAGs distintos y se pueden disparar en paralelo sobre las mismas
+#     tablas.
+#     BT_DATAHUB sigue funcionando: importlib lee el archivo directo del
+#     disco, .airflowignore solo afecta al DagBag.
+#
+#  2) PARSE TIME DESPERDICIADO
+#     etl/extraccion_parquet.py y etl/carga_parquet.py son librerias: su
+#     bloque DAG esta comentado, no registran nada. Pero al importarlos
+#     Airflow carga pyodbc, ibm_db, pyarrow y pandas cada 30 segundos.
+#     Quien si define el DAG es dag_bt_parquet_singlestore.py, que los
+#     importa con "from etl.carga_parquet import ejecutar_carga". Ese import
+#     sigue funcionando igual.
+#
+#  Para comprobar que quedo bien:
+#      docker compose exec airflow-webserver airflow dags list
+#  Deberias ver BT_DATAHUB pero NO ODS_PROCESOS_DATAHUB ni BDS_PROCESOS_DATAHUB.
+#
+#  Si algun dia quieres volver a ejecutar ODS o BDS por separado, comenta la
+#  linea de etl-datahub y vuelve a listar los DAGs.
+# ============================================================================
+
+# Modulos-libreria del pipeline parquet (el DAG real es
+# dag_bt_parquet_singlestore.py)
+production/etl/
+
+# Modulos ODS/BDS: los orquesta dag_bt_datahub.py via importlib
+production/etl-datahub/
+
+# Bytecode
+__pycache__/
+
+# Modulos-libreria del pipeline S2SQL (SingleStore -> SQL Server).
+# El DAG que si se registra es dag_s2sql_export.py, que los importa DENTRO de
+# sus funciones. Sin esta linea, el scheduler importaria pyodbc, pyarrow,
+# pandas y singlestoredb cada 30 segundos para nada.
+production/etl_s2sql/

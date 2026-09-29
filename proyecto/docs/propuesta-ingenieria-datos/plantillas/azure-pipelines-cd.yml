@@ -1,0 +1,180 @@
+# =============================================================================
+#  CD - Data Hub Finanzas
+# -----------------------------------------------------------------------------
+#  main ──► DEV ──► QA ──► [aprobacion] ──► PROD
+#
+#  Dos cosas que hacen la diferencia y conviene no perder de vista al editar
+#  este archivo:
+#
+#  1. A produccion se despliega DESDE EL TAG, no desde main. Entre la
+#     aprobacion y el despliegue pueden haber entrado commits nuevos a main, y
+#     lo aprobado tiene que ser exactamente lo que se instala.
+#
+#  2. Un despliegue que termina sin error NO significa que el sistema
+#     funcione. Por eso la etapa de verificacion posterior es obligatoria y
+#     marca el despliegue como fallido si algo no cuadra, aunque la
+#     instalacion en si haya salido bien.
+#
+#  La aprobacion manual NO se define aqui: se configura en Azure DevOps sobre
+#  el Environment "produccion" (Approvals and checks). Asi queda registrada
+#  como evidencia de auditoria y no depende de este archivo.
+# =============================================================================
+
+trigger:
+  branches:
+    include: [main]
+  tags:
+    include: ['v*']
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  PYTHON_VERSION: '3.11'
+  esTag: $[startsWith(variables['Build.SourceBranch'], 'refs/tags/v')]
+
+stages:
+
+# =============================================================================
+- stage: DEV
+  displayName: 'Desplegar a DEV'
+  condition: and(succeeded(), eq(variables.esTag, false))
+  jobs:
+  - deployment: DesplegarDev
+    environment: desarrollo
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - template: pasos/desplegar.yml
+            parameters:
+              target: dev
+              tokenVar: DEV_TOKEN
+          - script: pytest tests/integracion/ -v
+            displayName: 'Pruebas de integracion'
+            env:
+              DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+# =============================================================================
+- stage: QA
+  displayName: 'Desplegar a QA'
+  dependsOn: DEV
+  condition: and(succeeded(), eq(variables.esTag, false))
+  jobs:
+  - deployment: DesplegarQa
+    environment: certificacion
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - template: pasos/desplegar.yml
+            parameters:
+              target: qa
+              tokenVar: QA_TOKEN
+          - template: pasos/verificar.yml
+            parameters:
+              target: qa
+              catalogo: datahub_qa
+              tokenVar: QA_TOKEN
+
+# =============================================================================
+# Solo corre sobre un tag. El Environment "produccion" tiene configurada la
+# aprobacion manual en Azure DevOps: el pipeline se detiene aqui hasta que el
+# responsable de Ingenieria de Datos y el de Finanzas aprueben, y esa
+# aprobacion queda registrada con nombre y hora.
+# =============================================================================
+- stage: PROD
+  displayName: 'Desplegar a PRODUCCION'
+  condition: and(succeeded(), eq(variables.esTag, true))
+  jobs:
+  - deployment: DesplegarProd
+    environment: produccion
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+
+          - script: |
+              echo "Desplegando el tag $(Build.SourceBranchName) a PRODUCCION"
+              echo "Commit: $(Build.SourceVersion)"
+              echo "Solicitado por: $(Build.RequestedFor)"
+            displayName: 'Registrar que se despliega'
+
+          - template: pasos/desplegar.yml
+            parameters:
+              target: prod
+              tokenVar: PROD_TOKEN
+
+          - template: pasos/verificar.yml
+            parameters:
+              target: prod
+              catalogo: datahub_prod
+              tokenVar: PROD_TOKEN
+
+          # -----------------------------------------------------------------
+          # La nota de version se genera del historial de commits, no la
+          # escribe nadie a mano. Es lo que hace que exista siempre.
+          - script: |
+              anterior=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+              echo "## $(Build.SourceBranchName)" > NOTAS.md
+              if [ -n "$anterior" ]; then
+                git log --pretty=format:'- %s (%an)' $anterior..HEAD >> NOTAS.md
+              fi
+              cat NOTAS.md
+            displayName: 'Generar nota de version'
+
+          - task: PublishPipelineArtifact@1
+            inputs:
+              targetPath: NOTAS.md
+              artifactName: 'notas-$(Build.SourceBranchName)'
+
+# =============================================================================
+# En caso de fallo de la verificacion posterior, este stage deja escrito el
+# comando exacto de reversion. No la ejecuta solo: revertir es una decision,
+# no un automatismo, porque si el error esta en los datos de origen y no en el
+# codigo, revertir devuelve la tabla a un estado que tampoco era correcto.
+# =============================================================================
+- stage: Reversion
+  displayName: 'Instrucciones de reversion'
+  dependsOn: PROD
+  condition: failed()
+  jobs:
+  - job: Instrucciones
+    steps:
+    - script: |
+        anterior=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "DESCONOCIDO")
+        cat <<EOF
+        ===========================================================
+        EL DESPLIEGUE A PRODUCCION FALLO
+        ===========================================================
+
+        1. Revertir el CODIGO:
+
+             git checkout $anterior
+             databricks bundle deploy -t prod
+
+        2. Revisar si hubo ESCRITURA de datos con la version mala:
+
+             SELECT * FROM datahub_prod.ctl.ctl_lote
+             WHERE fecha_proceso = current_date();
+
+        3. Si hubo escritura, revertir los DATOS, de GOLD hacia atras
+           (Gold es lo que ve el usuario: se estabiliza primero):
+
+             DESCRIBE HISTORY datahub_prod.gold_analytics.cu_contabilidad;
+             RESTORE TABLE     datahub_prod.gold_analytics.cu_contabilidad
+                               TO VERSION AS OF <n>;
+
+        4. ANTES de revertir datos, contestar la primera pregunta del
+           runbook: el error esta en NUESTRO CODIGO o en el DATO DE
+           ORIGEN? Si es del origen, revertir es lo equivocado.
+
+        Runbook completo: docs/runbooks/
+        ===========================================================
+        EOF
+      displayName: 'Como revertir'

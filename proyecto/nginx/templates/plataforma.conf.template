@@ -1,0 +1,201 @@
+# =============================================================================
+# PROXY INVERSO TLS PARA AIRFLOW, SPARK Y FLOWER
+# -----------------------------------------------------------------------------
+# Este archivo es una PLANTILLA. La imagen oficial de nginx ejecuta envsubst
+# sobre /etc/nginx/templates/*.template al arrancar y deja el resultado en
+# /etc/nginx/conf.d/.
+#
+# OJO CON envsubst: por defecto sustituye TODA variable con forma $NOMBRE, y
+# eso incluiria $host, $remote_addr, $scheme... que son variables de NGINX y
+# tienen que llegar intactas. Si se sustituyen, quedan vacias y el proxy deja
+# de funcionar de formas dificiles de diagnosticar.
+#
+# Por eso el compose define:
+#     NGINX_ENVSUBST_FILTER=^DOMINIO_
+#
+# Solo se sustituyen las variables que empiezan por DOMINIO_. Las de nginx
+# pasan tal cual.
+# =============================================================================
+
+# --- Ajustes comunes de TLS --------------------------------------------------
+# TLS 1.2 y 1.3 unicamente. 1.0 y 1.1 estan retirados por la IETF (RFC 8996) y
+# son un hallazgo automatico en cualquier auditoria de banca.
+ssl_protocols             TLSv1.2 TLSv1.3;
+ssl_prefer_server_ciphers off;
+ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+ssl_session_cache         shared:SSL:10m;
+ssl_session_timeout       1d;
+ssl_session_tickets       off;
+
+# El certificado es el mismo para los tres nombres: lleva los tres como SAN.
+ssl_certificate           /etc/nginx/tls/plataforma.crt;
+ssl_certificate_key       /etc/nginx/tls/plataforma.key;
+
+# Grapado OCSP desactivado a proposito: requiere que nginx consulte al
+# respondedor de la CA, y en una red aislada esa consulta no sale. Dejarlo
+# activo anade un tiempo de espera a cada arranque sin ningun beneficio.
+ssl_stapling              off;
+
+# --- Negociacion de WebSocket ------------------------------------------------
+# Flower y la vista de bitacoras de Airflow usan WebSocket. El protocolo exige
+# que la cabecera Connection valga "upgrade" SOLO cuando el cliente pidio un
+# upgrade; en el resto de peticiones debe valer "close". Este map lo resuelve.
+#
+# Poner  Connection "upgrade"  fijo en todas las peticiones rompe las que no
+# son WebSocket, que son la mayoria.
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+
+# --- Upstreams por VARIABLE, no por nombre directo ---------------------------
+# Con  proxy_pass http://airflow-webserver:8080;  nginx resuelve el nombre AL
+# ARRANCAR, y si el contenedor no existe todavia se niega a arrancar entero:
+#     [emerg] host not found in upstream "airflow-webserver"
+#
+# Con una variable, la resolucion ocurre en cada peticion, usando el resolver
+# que escribe /docker-entrypoint.d/10-resolver.sh. Nginx arranca aunque los
+# backends esten caidos, y se entera solo cuando cambian de IP.
+
+# =============================================================================
+# TODO EL TRAFICO EN CLARO SE REDIRIGE
+# =============================================================================
+server {
+    # Solo IPv4, a proposito. Un  listen [::]:80  en un servidor con IPv6
+    # deshabilitado -que es lo normal en un hardening de banca- impide que
+    # nginx arranque:
+    #     [emerg] socket() [::]:80 failed (97: Address family not supported)
+    # La red interna del banco es IPv4; anadir IPv6 solo aporta ese riesgo.
+    listen      80;
+    server_name ${DOMINIO_AIRFLOW} ${DOMINIO_SPARK} ${DOMINIO_FLOWER};
+
+    # 301 y no 302: es permanente, y asi los navegadores dejan de intentar
+    # el puerto 80 en visitas posteriores.
+    return 301 https://$host$request_uri;
+}
+
+# =============================================================================
+# AIRFLOW
+# =============================================================================
+server {
+    listen      443 ssl;
+    http2       on;
+    server_name ${DOMINIO_AIRFLOW};
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "SAMEORIGIN" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+    access_log /var/log/nginx/airflow.access.log;
+    error_log  /var/log/nginx/airflow.error.log warn;
+
+    # Un DAG con muchas tareas genera respuestas grandes y lentas de construir.
+    # Con los 60 s por defecto, la vista de cuadricula de un DAG grande da 504.
+    proxy_read_timeout    300s;
+    proxy_send_timeout    300s;
+    proxy_connect_timeout 30s;
+
+    client_max_body_size  32m;
+
+    location / {
+        set $destino airflow-webserver;
+        proxy_pass http://$destino:8080;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # LA CABECERA CRITICA. Sin ella, Airflow cree que la peticion llego por
+        # HTTP y genera todos los enlaces y redirecciones con http://. El
+        # navegador los bloquea como contenido mixto y la interfaz carga a
+        # medias: se ve el HTML pero no el CSS ni el JavaScript.
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host  $host;
+        proxy_set_header X-Forwarded-Port  $server_port;
+
+        # La vista de cuadricula y el visor de bitacoras usan conexiones
+        # persistentes. Sin esto se cortan a mitad.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+
+        proxy_buffering off;
+    }
+}
+
+# =============================================================================
+# SPARK (interfaz del master)
+# =============================================================================
+server {
+    listen      443 ssl;
+    http2       on;
+    server_name ${DOMINIO_SPARK};
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin" always;
+
+    access_log /var/log/nginx/spark.access.log;
+    error_log  /var/log/nginx/spark.error.log warn;
+
+    proxy_read_timeout    300s;
+    proxy_connect_timeout 30s;
+
+    location / {
+        # El master expone su interfaz en el 8080 DENTRO del contenedor. En el
+        # anfitrion se publica en el 8082 para no chocar con Airflow, pero aqui
+        # hablamos por la red interna y vale el puerto real.
+        set $destino spark-master;
+        proxy_pass http://$destino:8080;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_http_version 1.1;
+
+        # Spark rescribe sus propios enlaces usando spark.ui.reverseProxyUrl,
+        # que escribe scripts/generar_csr.sh en spark/conf/spark-defaults.conf.
+        # Si esa opcion falta, la interfaz carga pero cada enlace a un worker
+        # o a una aplicacion apunta a un nombre interno del contenedor que el
+        # navegador no resuelve.
+    }
+}
+
+# =============================================================================
+# FLOWER (monitor de Celery)
+# =============================================================================
+server {
+    listen      443 ssl;
+    http2       on;
+    server_name ${DOMINIO_FLOWER};
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options    "nosniff" always;
+    add_header X-Frame-Options           "SAMEORIGIN" always;
+
+    access_log /var/log/nginx/flower.access.log;
+    error_log  /var/log/nginx/flower.error.log warn;
+
+    proxy_read_timeout    300s;
+    proxy_connect_timeout 30s;
+
+    location / {
+        set $destino airflow-flower;
+        proxy_pass http://$destino:5555;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Flower actualiza sus tablas por WebSocket. Sin la negociacion de
+        # Upgrade, la pagina carga pero los numeros se quedan congelados y
+        # parece que el cluster esta parado.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+    }
+}

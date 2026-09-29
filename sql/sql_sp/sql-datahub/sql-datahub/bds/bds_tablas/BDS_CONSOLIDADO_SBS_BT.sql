@@ -1,0 +1,21 @@
+CREATE TABLE BDS_CONSOLIDADO_SBS_BT (
+	COD_RUBRO               VARCHAR(20) NOT NULL		COMMENT 'Código del rubro Bantotal',
+	COD_MONEDA              VARCHAR(80) DEFAULT NULL	COMMENT 'Código o identificador de la moneda asociada al rubro',
+	COD_RUBRO_SIN_MONEDA    LONGTEXT  	DEFAULT NULL	COMMENT 'Código de rubro depurado sin el componente de moneda',
+	COD_RUBRO_SBS           VARCHAR(250)DEFAULT NULL 	COMMENT 'Código de rubro equivalente según la estructura SBS',
+	DES_RUBRO_SBS           VARCHAR(500)DEFAULT NULL 	COMMENT 'Descripción del rubro SBS asociado',
+	COD_TITULO              INT 		DEFAULT NULL	COMMENT 'Código de título dentro de la jerarquía contable o regulatoria',
+	COD_CAPITULO            INT 		DEFAULT NULL	COMMENT 'Código de capítulo dentro de la jerarquía contable o regulatoria',
+	COD_PLAZO               INT 		DEFAULT NULL	COMMENT 'Código de clasificación por plazo',
+	COD_GRUPO               INT 		DEFAULT NULL	COMMENT 'Código de grupo funcional o contable',
+	DES_RUBRO               VARCHAR(40) DEFAULT NULL	COMMENT 'Descripción funcional del rubro Bantotal',
+	IND_SIGNO_POSIT         VARCHAR(1) 	DEFAULT NULL	COMMENT 'Indicador que determina si el rubro maneja saldo positivo',
+	IND_FECHA_VALOR         VARCHAR(1) 	DEFAULT NULL	COMMENT 'Indicador que requiere manejo de fecha valor',
+	DIG1                    VARCHAR(80) DEFAULT NULL	COMMENT 'Primer nivel de agrupación derivado del código SBS',
+	DIG2                    VARCHAR(80) DEFAULT NULL	COMMENT 'Segundo nivel de agrupación derivado del código SBS',
+	DIG4                    VARCHAR(80) DEFAULT NULL	COMMENT 'Cuarto nivel de agrupación derivado del código SBS',
+	DIG6                    VARCHAR(80) DEFAULT NULL	COMMENT 'Sexto nivel de agrupación derivado del código SBS',
+	DIG8                    VARCHAR(80) DEFAULT NULL	COMMENT 'Octavo nivel de agrupación derivado del código SBS',
+	DIG10                   VARCHAR(80) DEFAULT NULL	COMMENT 'Décimo nivel de agrupación derivado del código SBS',
+	GRUP2                   VARCHAR(80) DEFAULT NULL	COMMENT 'Agrupación funcional de segundo nivel utilizada para consolidación y análisis'
+);

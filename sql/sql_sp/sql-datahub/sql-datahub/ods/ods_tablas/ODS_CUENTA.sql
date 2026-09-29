@@ -1,0 +1,23 @@
+CREATE TABLE   ODS_CUENTA   ( 
+    FECHA_PROCESO           date          DEFAULT NULL,
+    COD_EMPRESA             int(11)       NOT NULL,
+    NUM_CUENTA_BT           int(11)       NOT NULL,
+    NOM_CUENTA              varchar(35)     DEFAULT NULL,
+    IND_RESIDENTE           varchar(1)      DEFAULT NULL,
+    COD_EJECUTIVO           int(11)       DEFAULT NULL,
+    COD_CLAS_INTERNA        int(11)       DEFAULT NULL,
+    FEC_ALTA                date          DEFAULT NULL,
+    IND_RETEN_CORRESP       varchar(1)      DEFAULT NULL,
+    COD_SECTOR              int(11)       DEFAULT NULL,
+    IND_INSTITU_FINANCI     varchar(1)      DEFAULT NULL,
+    NUM_IMPORT_EXPORT       int(11)       DEFAULT NULL,
+    IND_EMPLEADO            varchar(1)      DEFAULT NULL,
+    IND_PROVEEDOR           varchar(1)      DEFAULT NULL,
+    FEC_BAJA                date          DEFAULT NULL,
+    NUM_SEGM_CLIE_MERCA     int(11)       DEFAULT NULL,
+    FUENTE                  varchar(250)    DEFAULT 'BANTOTAL',
+    FECHA_CARGA             datetime      DEFAULT CURRENT_TIMESTAMP,
+    BATCH_ID                varchar(25)     DEFAULT NULL,
+  SHARD KEY (  COD_EMPRESA  ,  NUM_CUENTA_BT  ),
+  CONSTRAINT   PK_ODS_CUENTA_01   UNIQUE(  COD_EMPRESA  ,  NUM_CUENTA_BT  )
+);

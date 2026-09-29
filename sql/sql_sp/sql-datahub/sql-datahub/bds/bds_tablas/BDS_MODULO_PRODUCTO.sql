@@ -1,0 +1,20 @@
+CREATE TABLE  BDS_MODULO_PRODUCTO  (
+   FECHA_PROCESO        date DEFAULT NULL COMMENT 'Fecha de proceso contable' ,
+   COD_EMPRESA          decimal(3,0) NOT NULL COMMENT 'Código de empresa' ,
+   NUM_CODIGO           decimal(5,0) NOT NULL COMMENT 'Código identificador del producto' ,
+   COD_MODULO           varchar(16)  NOT NULL COMMENT 'Código de Módulo' ,
+   COD_TIPO_OPERACION   varchar(16)  NOT NULL COMMENT 'Código de tipo de operación' ,
+   BC206ID3             varchar(16)  NOT NULL COMMENT 'Código auxiliar de parametrización' ,
+   BC206ID4             varchar(16)  NOT NULL COMMENT 'Código auxiliar 4 de parametrización' ,
+   TIP_REGISTRO         varchar(16)  DEFAULT NULL COMMENT '1: Negocio, 2: Contabilidad' ,
+   TIP_RELACION         varchar(16)  DEFAULT NULL COMMENT '1: Directo, 2: Indirecto' ,
+   TIP_NEGOCIO          varchar(16)  DEFAULT NULL COMMENT '1: BP, 2: BN, 3: BC, 4: TS, 5: NC' ,
+   TIP_BALANCE          varchar(40)  DEFAULT NULL COMMENT '1: Activo, 2: Pasivo, 3: Otros' ,
+   DES_MODULO           varchar(40)  DEFAULT NULL COMMENT 'Descripción del módulo' ,
+   DES_TIPO_OPERACION   varchar(40)  DEFAULT NULL COMMENT 'Descripción del tipo de operación' ,
+   FUENTE               varchar(250) DEFAULT 'BANTOTAL' COMMENT 'Sistema origen de los datos' ,
+   FECHA_CARGA          datetime     DEFAULT CURRENT_TIMESTAMP COMMENT 'Fecha y hora de carga' ,
+   BATCH_ID             varchar(25)  DEFAULT NULL,
+  SHARD KEY  ( COD_EMPRESA , NUM_CODIGO , COD_MODULO , COD_TIPO_OPERACION , BC206ID3 , BC206ID4 ),
+  CONSTRAINT  UK_ODS_MODULO_PRODUCTO_01 UNIQUE ( COD_EMPRESA , NUM_CODIGO , COD_MODULO , COD_TIPO_OPERACION , BC206ID3 , BC206ID4 )
+)

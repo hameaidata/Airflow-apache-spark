@@ -1,0 +1,19 @@
+CREATE TABLE  ODS_EJECUTIVOS  (
+   FECHA_PROCESO	date 		  NOT NULL		COMMENT 'Fecha de registro',
+   COD_EMPRESA		decimal(3,0)  NOT NULL		COMMENT 'Codigo de Empresa',
+   NUM_CODIGO		decimal(5,0)  NOT NULL		COMMENT 'Numero de codigo de reporte',
+   COD_EJECUTIVO	varchar(16)   NOT NULL		COMMENT 'Codigo de Ejecutivo',
+   BC206ID3			varchar(16)   NOT NULL		COMMENT '',
+   BC206ID4			varchar(16)   NOT NULL		COMMENT '',
+   NUM_SEGMENTO		varchar(16)   DEFAULT NULL	COMMENT 'Numero de Segmento',
+   NUM_BANCA		varchar(16)   DEFAULT NULL	COMMENT 'Numero de Banca',
+   BC206NRO3		varchar(16)   DEFAULT NULL	COMMENT '',
+   NOM_EJECUTIVO	varchar(40)   DEFAULT NULL	COMMENT 'Nombre del ejecutivo',
+   NOM_JEFE_EQUIPO  varchar(40)   DEFAULT NULL	COMMENT 'Nombre del Jefe del Ejecutivo',
+   BC206CHR3		varchar(40)   DEFAULT NULL	COMMENT '',
+   FUENTE			varchar(250)  DEFAULT 'BANTOTAL',
+   FECHA_CARGA  	datetime DEFAULT CURRENT_TIMESTAMP,
+   BATCH_ID  		varchar(25)   DEFAULT NULL,
+  SHARD KEY ( COD_EMPRESA , NUM_CODIGO , FECHA_PROCESO , COD_EJECUTIVO , BC206ID3 , BC206ID4 ),
+  CONSTRAINT  UK_ODS_EJECUTIVOS_01 UNIQUE ( COD_EMPRESA , NUM_CODIGO , FECHA_PROCESO , COD_EJECUTIVO , BC206ID3 , BC206ID4 )
+)

@@ -1,0 +1,175 @@
+# =============================================================================
+#  Databricks Asset Bundle - Data Hub Finanzas
+# -----------------------------------------------------------------------------
+#  Esta es LA unidad de despliegue. Lo que se prueba en QA es literalmente el
+#  mismo artefacto que entra a produccion: solo cambian los valores del target.
+#
+#  Uso:
+#      databricks bundle validate -t dev
+#      databricks bundle deploy   -t dev
+#      databricks bundle run      -t dev ingesta_bantotal_diaria
+#
+#  Lo que NO va aqui: secretos (Key Vault), datos, y la infraestructura
+#  compartida (workspaces, redes, metastore), que va en Terraform bajo infra/.
+#  La frontera es la velocidad de cambio: lo que cambia en cada sprint va aqui;
+#  lo que cambia por trimestre va en Terraform.
+# =============================================================================
+
+bundle:
+  name: datahub-finanzas
+
+# -----------------------------------------------------------------------------
+# Un archivo por grupo de recursos, no uno gigante: asi dos personas trabajando
+# en dominios distintos rara vez tocan el mismo archivo. Los conflictos de
+# fusion en YAML son especialmente molestos porque el archivo sigue siendo
+# valido despues de un merge mal resuelto.
+# -----------------------------------------------------------------------------
+include:
+  - resources/jobs_ingesta.yml
+  - resources/jobs_transformacion.yml
+  - resources/pipelines_bronze.yml
+  - resources/pipelines_silver.yml
+  - resources/pipelines_gold.yml
+
+# -----------------------------------------------------------------------------
+# Variables: todo lo que cambia entre entornos se declara, nunca se codifica.
+# Si una transformacion lleva dentro un "if entorno == 'prod'", lo que se probo
+# en QA no es lo que corre en produccion, y entonces QA no prueba nada.
+# -----------------------------------------------------------------------------
+variables:
+  catalogo:
+    description: Catalogo de Unity Catalog del entorno
+  warehouse_id:
+    description: SQL Warehouse para las tareas de consulta y el refresco de BI
+  retencion_time_travel_dias:
+    description: >
+      Dias de historia Delta. El defecto de 7 NO alcanza para revertir un cierre
+      mensual detectado tarde: en produccion debe cubrir al menos dos cierres.
+    default: 7
+  calidad_modo:
+    description: >
+      bloquear = una regla fail detiene la carga.
+      advertir = avisa y continua.
+      En desarrollo tiene que ser advertir: el ingeniero trabaja justamente
+      sobre datos incompletos. En produccion, bloquear.
+    default: advertir
+  alertas_destino:
+    description: Destinatario de las alertas del entorno
+  notificar_inicio:
+    description: Si se notifica tambien el inicio de cada corrida
+    default: false
+
+# -----------------------------------------------------------------------------
+# Valores comunes a todos los targets. Las etiquetas no son decorativas: sin
+# ellas, system.billing muestra un numero total que no se puede atribuir ni
+# discutir con nadie.
+# -----------------------------------------------------------------------------
+sync:
+  exclude:
+    - tests/**
+    - docs/**
+    - infra/**
+    - .azure-pipelines/**
+
+targets:
+
+  # ===========================================================================
+  # DESARROLLO
+  # ===========================================================================
+  # mode: development no es cosmetico. Prefija cada objeto con el nombre del
+  # usuario, de forma que dos ingenieros trabajando a la vez no se pisan los
+  # trabajos, y deja las programaciones EN PAUSA para que nadie dispare una
+  # carga sin querer desde su rama.
+  # ===========================================================================
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-NONPROD.azuredatabricks.net
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}
+    variables:
+      catalogo: datahub_dev
+      warehouse_id: ${var.warehouse_nonprod}
+      retencion_time_travel_dias: 7
+      calidad_modo: advertir
+      alertas_destino: equipo-datos@banco.com
+    presets:
+      tags:
+        proyecto: datahub-finanzas
+        entorno: dev
+        centro_costo: finanzas
+        responsable: ingenieria-datos
+
+  # ===========================================================================
+  # CERTIFICACION
+  # ===========================================================================
+  # Estructuralmente igual que produccion; se diferencia en los datos, que son
+  # un subconjunto enmascarado (ver ADR-004). Nadie escribe a mano aqui: si un
+  # ingeniero puede corregir una tabla de QA desde un notebook, lo que se
+  # certifica deja de ser lo que produce el pipeline.
+  # ===========================================================================
+  qa:
+    mode: production
+    workspace:
+      host: https://adb-NONPROD.azuredatabricks.net
+      root_path: /Workspace/Shared/.bundle/qa/${bundle.name}
+    run_as:
+      service_principal_name: ${var.spn_qa}
+    variables:
+      catalogo: datahub_qa
+      warehouse_id: ${var.warehouse_nonprod}
+      retencion_time_travel_dias: 7
+      calidad_modo: bloquear
+      alertas_destino: equipo-datos@banco.com
+    presets:
+      tags:
+        proyecto: datahub-finanzas
+        entorno: qa
+        centro_costo: finanzas
+        responsable: ingenieria-datos
+    permissions:
+      - level: CAN_VIEW
+        group_name: datahub-ingenieros
+      - level: CAN_MANAGE
+        service_principal_name: ${var.spn_qa}
+
+  # ===========================================================================
+  # PRODUCCION
+  # ===========================================================================
+  # mode: production hace que el despliegue FALLE si hay algo sin declarar, en
+  # lugar de completarlo con defectos. Es justo lo que se quiere aqui.
+  #
+  # Se despliega SIEMPRE desde un tag, nunca desde main: entre la aprobacion y
+  # el despliegue pueden haber entrado commits nuevos, y lo aprobado tiene que
+  # ser exactamente lo que se instala.
+  # ===========================================================================
+  prod:
+    mode: production
+    workspace:
+      host: https://adb-PROD.azuredatabricks.net
+      root_path: /Workspace/Shared/.bundle/prod/${bundle.name}
+    run_as:
+      service_principal_name: ${var.spn_prod}
+    variables:
+      catalogo: datahub_prod
+      warehouse_id: ${var.warehouse_prod}
+      retencion_time_travel_dias: 35     # cubre dos cierres mensuales
+      calidad_modo: bloquear
+      alertas_destino: guardia-datos@banco.com
+      notificar_inicio: true
+    presets:
+      tags:
+        proyecto: datahub-finanzas
+        entorno: prod
+        centro_costo: finanzas
+        responsable: ingenieria-datos
+    # Ningun grupo de personas tiene CAN_MANAGE en produccion. Diagnosticar
+    # exige ver; corregir debe pasar por el pipeline. Si algo solo se puede
+    # resolver entrando a produccion, ese algo es un defecto del pipeline.
+    permissions:
+      - level: CAN_VIEW
+        group_name: datahub-arquitectos
+      - level: CAN_VIEW
+        group_name: datahub-operadores
+      - level: CAN_MANAGE
+        service_principal_name: ${var.spn_prod}

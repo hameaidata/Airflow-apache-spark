@@ -33,7 +33,7 @@
 --  es la unica que los procesos pueden abrir. La carpeta fisica esta fuera
 --  del contenedor y se define en .env:
 --
---      Windows :  PARQUET_HOST_DIR=D:/datahub/parquet
+--      Windows :  PARQUET_HOST_DIR=./data/parquet   (dentro del proyecto)
 --      Red Hat :  PARQUET_HOST_DIR=/datos/datahub/parquet
 --      ambos ->   PARQUET_CONTAINER_DIR=/data/parquet
 --

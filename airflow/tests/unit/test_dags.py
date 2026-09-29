@@ -296,12 +296,24 @@ def test_la_carpeta_de_parquet_esta_montada_en_los_compose():
         if not archivo.exists():
             continue
         texto = archivo.read_text(encoding="utf-8")
-        assert "${PARQUET_HOST_DIR}" in texto, (
+        # Se acepta ${PARQUET_HOST_DIR} y ${PARQUET_HOST_DIR:-...}. El valor por
+        # defecto se agrego despues de escribir este test, y es justo lo que
+        # evita el "invalid spec: :/data/parquet: empty section between colons"
+        # cuando alguien levanta el stack sin esa linea en su .env.
+        assert "${PARQUET_HOST_DIR" in texto, (
             f"{nombre} no monta PARQUET_HOST_DIR: los parquet quedarian dentro "
             f"del contenedor."
         )
+
         if nombre.endswith("rhel.yml"):
-            assert "${PARQUET_HOST_DIR}:${PARQUET_CONTAINER_DIR:-/data/parquet}:z" in texto, (
-                "En Red Hat el montaje necesita la etiqueta SELinux ':z' o el "
-                "contenedor no podra escribir."
-            )
+            # En Red Hat, SELinux bloquea la escritura en un bind mount sin la
+            # etiqueta ':z'. El sintoma es un "Permission denied" que no se
+            # arregla con chmod ni con chown, porque no es un problema de
+            # permisos de Unix.
+            for linea in texto.splitlines():
+                limpia = linea.split("#", 1)[0].strip()
+                if limpia.startswith("-") and "PARQUET_HOST_DIR" in limpia:
+                    assert limpia.endswith(":z"), (
+                        f"este montaje de {nombre} no lleva la etiqueta SELinux "
+                        f"':z':\n  {limpia}"
+                    )

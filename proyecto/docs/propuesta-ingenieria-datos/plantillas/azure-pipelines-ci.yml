@@ -1,0 +1,170 @@
+# =============================================================================
+#  CI - Data Hub Finanzas
+# -----------------------------------------------------------------------------
+#  Se dispara en cada pull request contra main. NINGUNA etapa toca datos reales.
+#
+#  El orden no es casual: lo barato y sin cluster va primero, de forma que un
+#  error de formato o una configuracion mal escrita corten el PR en dos minutos
+#  en lugar de despues de levantar computo.
+# =============================================================================
+
+trigger: none          # el CI corre en PR, no en push a main
+
+pr:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  PYTHON_VERSION: '3.11'
+  DATABRICKS_HOST: $(DEV_HOST)
+
+stages:
+
+# =============================================================================
+- stage: Rapido
+  displayName: 'Validacion rapida (sin cluster)'
+  jobs:
+  - job: Validar
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: |
+        pip install -r requirements-dev.txt
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      displayName: 'Dependencias y CLI de Databricks'
+
+    # -------------------------------------------------------------------------
+    - script: |
+        ruff check src/ tests/
+        black --check src/ tests/
+        sqlfluff lint src/ --dialect databricks
+      displayName: '1 · Formato y linting'
+
+    # -------------------------------------------------------------------------
+    # Un secreto que llega al repositorio queda en el historial y hay que darlo
+    # por comprometido, aunque se borre en el commit siguiente. Es mas barato
+    # impedirlo que gestionarlo.
+    - script: |
+        docker run --rm -v "$(pwd):/repo" zricethezav/gitleaks:latest \
+          detect --source=/repo --no-git --redact --verbose
+      displayName: '2 · Analisis de secretos'
+
+    # -------------------------------------------------------------------------
+    # Esta etapa atrapa la clase de error mas cara del proyecto: una tabla en
+    # modo incremental sin columna de corte se cargaria entera cada dia y
+    # duplicaria el destino. Sin esta validacion, el sintoma aparece de
+    # madrugada, en produccion, cuando no hay nadie mirando.
+    - script: |
+        python -m tests.validadores.catalogo_tablas conf/catalogo_tablas.yml
+        python -m tests.validadores.contratos       src/transformacion/*/contratos/
+      displayName: '3 · Validacion de configuracion y contratos'
+
+    # -------------------------------------------------------------------------
+    - script: |
+        for t in dev qa prod; do
+          echo "--- validando target $t ---"
+          databricks bundle validate -t $t
+        done
+      displayName: '4 · Validacion del bundle (los tres targets)'
+      env:
+        DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+    # -------------------------------------------------------------------------
+    - script: |
+        pytest tests/unitarias/ \
+          --junitxml=$(Build.ArtifactStagingDirectory)/unitarias.xml \
+          --cov=src --cov-report=xml --cov-fail-under=70
+      displayName: '5 · Pruebas unitarias y cobertura'
+
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFiles: '$(Build.ArtifactStagingDirectory)/unitarias.xml'
+        testRunTitle: 'Unitarias'
+
+    - task: PublishCodeCoverageResults@2
+      condition: succeededOrFailed()
+      inputs:
+        summaryFileLocation: coverage.xml
+
+# =============================================================================
+# Esta etapa necesita computo y es la mas lenta, por eso va al final: si algo
+# basico esta mal, el PR ya se corto sin gastar cluster.
+# =============================================================================
+- stage: Integracion
+  displayName: 'Pruebas de integracion (DEV, datos sinteticos)'
+  dependsOn: Rapido
+  condition: succeeded()
+  jobs:
+  - job: Integrar
+    timeoutInMinutes: 45
+    steps:
+
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PYTHON_VERSION)
+
+    - script: |
+        pip install -r requirements-dev.txt
+        curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+      displayName: 'Dependencias'
+
+    # -------------------------------------------------------------------------
+    # Se despliega a un prefijo efimero propio del PR, para que dos pull
+    # requests simultaneos no se pisen los objetos en DEV.
+    - script: |
+        databricks bundle deploy -t dev --var="prefijo=pr$(System.PullRequest.PullRequestId)"
+      displayName: 'Desplegar a DEV (efimero)'
+      env:
+        DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+    - script: |
+        python -m tests.datos.generadores.sembrar --catalogo datahub_dev \
+          --prefijo pr$(System.PullRequest.PullRequestId)
+      displayName: 'Sembrar datos sinteticos'
+      env:
+        DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+    - script: |
+        pytest tests/integracion/ -v \
+          --junitxml=$(Build.ArtifactStagingDirectory)/integracion.xml
+      displayName: 'Pruebas de integracion y de contrato'
+      env:
+        DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+    # -------------------------------------------------------------------------
+    # always() a proposito: si las pruebas fallan, los objetos efimeros deben
+    # limpiarse igual. Un DEV lleno de restos de PR viejos acaba costando
+    # dinero y confundiendo a quien busque algo.
+    - script: |
+        databricks bundle destroy -t dev --auto-approve \
+          --var="prefijo=pr$(System.PullRequest.PullRequestId)"
+      displayName: 'Limpiar objetos efimeros'
+      condition: always()
+      env:
+        DATABRICKS_TOKEN: $(DEV_TOKEN)
+
+    - task: PublishTestResults@2
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFiles: '$(Build.ArtifactStagingDirectory)/integracion.xml'
+        testRunTitle: 'Integracion'
+
+# =============================================================================
+- stage: Artefacto
+  displayName: 'Publicar artefacto'
+  dependsOn: Integracion
+  condition: succeeded()
+  jobs:
+  - job: Publicar
+    steps:
+    - task: PublishPipelineArtifact@1
+      inputs:
+        targetPath: '$(Build.SourcesDirectory)'
+        artifactName: 'bundle'

@@ -68,6 +68,52 @@ RUN if [ "$INSTALAR_ODBC" = "true" ]; then \
     fi
 
 # ----------------------------------------------------------------------------
+# ODBC de IBM i (AS/400) — para Bantotal por ODBC
+# ----------------------------------------------------------------------------
+# El driver se llama "IBM i Access ODBC Driver" y viene en el paquete
+# ibm-iaccess, que IBM publica en un repositorio APT/YUM PUBLICO: no hace falta
+# usuario de IBM ni pasar por Entitled Systems Support para instalarlo.
+#
+#     Nombre del driver:  IBM i Access ODBC Driver 64-bit
+#     Biblioteca:         /opt/ibm/iaccess/lib64/libcwbodbc.so
+#
+# unixODBC lo arrastra el propio paquete como dependencia, y ademas ya se
+# instalo mas arriba junto con el driver de SQL Server.
+#
+# SOBRE LA LICENCIA
+# El paquete se descarga e instala sin entitlement. Distinto es si el USO de
+# ODBC contra su sistema requiere la licencia IBM i Access Family (5770-XW1):
+# IBM documenta que la emulacion 5250 y Data Transfer dejaron de necesitarla a
+# partir de ACS 1.1.9.1, pero no encontre una declaracion igual de explicita
+# para ODBC. Confirmelo con su representante de IBM antes de usarlo en
+# produccion.
+#
+# Para el pipeline, JDBC evita esa duda por completo: JTOpen es open source
+# bajo IBM Public License y no depende de ninguna licencia de cliente.
+#
+# Si el repositorio esta bloqueado en la red corporativa, el build NO falla:
+# la imagen queda sin ODBC de IBM i y con JDBC, que es suficiente.
+# ----------------------------------------------------------------------------
+ARG INSTALAR_ODBC_IBMI=true
+RUN if [ "$INSTALAR_ODBC_IBMI" = "true" ]; then \
+      ( set -e; \
+        curl -fsSL https://public.dhe.ibm.com/software/ibmi/products/odbc/debs/dists/1.1.0/ibmi-acs-1.1.0.list \
+          -o /etc/apt/sources.list.d/ibmi-acs.list && \
+        curl -fsSL https://public.dhe.ibm.com/software/ibmi/products/odbc/debs/dists/1.1.0/Release.key \
+          | gpg --dearmor -o /usr/share/keyrings/ibmi-acs.gpg && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends ibm-iaccess && \
+        apt-get clean && rm -rf /var/lib/apt/lists/* ) \
+      || echo "AVISO: no se instalo el ODBC de IBM i (red bloqueada?). Use JDBC (jt400)."; \
+    else \
+      echo "ODBC de IBM i omitido (INSTALAR_ODBC_IBMI=false)"; \
+    fi
+
+# Deja constancia en el log del build de que drivers ODBC quedaron registrados.
+RUN echo "=== Drivers ODBC registrados ===" && \
+    ( odbcinst -q -d || echo "(ninguno)" )
+
+# ----------------------------------------------------------------------------
 # Java 8, JUNTO a Java 17 (no en lugar de)
 # ----------------------------------------------------------------------------
 # POR QUE LOS DOS
@@ -207,7 +253,42 @@ ENV PATH="${SPARK_HOME}/bin:${PATH}"
 #
 # La 12.8 publica ambas variantes y esta soportada hasta julio de 2029 segun la
 # matriz de Microsoft. Las dos sirven contra SQL Server 2022.
+# ----------------------------------------------------------------------------
+# JTOpen (jt400) — EL DRIVER DE BANTOTAL / IBM i
+# ----------------------------------------------------------------------------
+# Es el IBM Toolbox for Java, el driver correcto para Db2 for i (AS/400).
+# OJO: com.ibm.db2:jcc, que ya estaba en esta lista, es el driver de Db2 para
+# LUW y z/OS. NO es el de IBM i. Para Bantotal hace falta jt400.
+#
+#     Clase del driver:  com.ibm.as400.access.AS400JDBCDriver
+#
+# LA VERSION DEPENDE DE SU RELEASE DE IBM i. Esta es la matriz oficial del
+# proyecto (github.com/IBM/JTOpen), y la columna que importa es "conecta a",
+# porque nosotros conectamos DESDE el contenedor HACIA el AS/400; la columna
+# "instala en" solo aplica si el codigo corriera dentro del propio IBM i:
+#
+#     JTOpen      Java minimo   conecta a IBM i
+#     ----------  -----------   ---------------
+#     21.x        8             7.3 o superior     <- ACTIVA (21.0.7, jul-2026)
+#     20.x        7             7.3 o superior
+#     11.x        1.1           7.3 o superior
+#     10.x        1.1           7.2 o superior     <- para IBM i 7.2
+#
+# Si su AS/400 es 7.3 o 7.4, deje la linea de abajo como esta.
+# Si es 7.2, comente la 21.0.7 y descomente la 10.7.
+# Si es 7.1 o anterior, ninguna de estas sirve: hay que bajar un JTOpen 9.x o
+# anterior de sourceforge.net/projects/jt400 y copiarlo con COPY.
+#
+# Para saber su release, ejecute en el AS/400:
+#     SELECT OS_VERSION, OS_RELEASE FROM SYSIBMADM.ENV_SYS_INFO;
+# o en linea de comandos:  DSPPTF   (arriba a la derecha sale VxRyMz)
+#
+# El jar por defecto de JTOpen esta compilado para Java 8, asi que corre tanto
+# con JAVA_HOME=17 como con JAVA_HOME_8. A diferencia de mssql-jdbc, aqui UN
+# solo jar cubre las dos JVM y no hay que elegir variante.
+# ----------------------------------------------------------------------------
 ARG JDBC_DRIVERS="\
+net.sf.jt400:jt400:21.0.7:jt400.jar \
 com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11:mssql-jdbc.jar \
 com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre8:mssql-jdbc-jre8.jar \
 com.ibm.db2:jcc:11.5.9.0:db2-jcc.jar \
@@ -215,6 +296,14 @@ com.mysql:mysql-connector-j:9.1.0:mysql-jdbc.jar \
 org.postgresql:postgresql:42.7.4:postgresql-jdbc.jar \
 com.singlestore:singlestore-jdbc-client:1.2.7:singlestore-jdbc.jar \
 "
+
+# Alternativa para IBM i 7.2: comente la linea de jt400 21.0.7 de arriba y
+# descomente esta, reemplazandola en JDBC_DRIVERS.
+#     net.sf.jt400:jt400:10.7:jt400.jar
+#
+# JTOpen 10.7 esta compilado para Java 1.1. Carga sin problema en una JVM
+# moderna (el bytecode antiguo es compatible hacia adelante), pero si diera
+# guerra con Java 17, corra la tarea con JAVA_HOME=$JAVA_HOME_8.
 
 ARG MAVEN_REPO=https://repo1.maven.org/maven2
 
@@ -251,6 +340,77 @@ RUN set -e; \
         echo "La imagen se construye igual. Los motores afectados no funcionaran"; \
         echo "hasta que corrija la version en JDBC_DRIVERS y reconstruya."; \
     fi
+
+# ============================================================================
+# JARS PROPIOS — airflow/jars/
+# ----------------------------------------------------------------------------
+# Todo .jar que se deje en airflow/jars/ del repositorio entra en la imagen,
+# igual que si se hubiera descargado. Es para los drivers que NO se pueden
+# bajar en el build:
+#
+#   - no estan en Maven Central (drivers propietarios del proveedor)
+#   - la red corporativa bloquea repo1.maven.org
+#   - hace falta fijar una version distinta de la que descarga JDBC_DRIVERS
+#
+# PRECEDENCIA: EL JAR LOCAL GANA.
+# Esta copia va DESPUES de la descarga a proposito. Si un archivo de
+# airflow/jars/ se llama igual que uno descargado, lo reemplaza. Asi se puede
+# fijar una version concreta dejando el archivo con el nombre de destino que
+# usa el catalogo, sin tocar este Dockerfile ni el codigo.
+#
+# Se copia primero a una carpeta aparte y de ahi se mueven SOLO los .jar: asi
+# el README.md y el .gitkeep de esa carpeta no acaban en /opt/airflow/jars.
+#
+# El .gitkeep existe para que esta COPY no falle cuando la carpeta esta vacia.
+# ============================================================================
+COPY --chown=airflow:root airflow/jars/ /tmp/jars-propios/
+
+RUN set -e; \
+    propios=$(find /tmp/jars-propios -maxdepth 1 -name "*.jar" 2>/dev/null | sort); \
+    if [ -z "$propios" ]; then \
+        echo "No hay jars propios en airflow/jars/ (solo los descargados)."; \
+    else \
+        echo "=== jars propios de airflow/jars/ ==="; \
+        duplicados=""; \
+        for jar in $propios; do \
+            nombre=$(basename "$jar"); \
+            if [ -f "/opt/airflow/jars/${nombre}" ]; then \
+                echo "  ${nombre}  REEMPLAZA al descargado"; \
+            else \
+                echo "  ${nombre}  nuevo"; \
+            fi; \
+            base=$(echo "$nombre" | sed -E 's/-?[0-9]+(\.[0-9]+)*.*\.jar$//; s/\.jar$//'); \
+            for otro in /opt/airflow/jars/*.jar; do \
+                [ -f "$otro" ] || continue; \
+                otro_nombre=$(basename "$otro"); \
+                [ "$otro_nombre" = "$nombre" ] && continue; \
+                otro_base=$(echo "$otro_nombre" | sed -E 's/-?[0-9]+(\.[0-9]+)*.*\.jar$//; s/\.jar$//'); \
+                if [ "$base" = "$otro_base" ]; then \
+                    duplicados="${duplicados} ${nombre}/${otro_nombre}"; \
+                fi; \
+            done; \
+            cp "$jar" /opt/airflow/jars/; \
+        done; \
+        if [ -n "$duplicados" ]; then \
+            echo ""; \
+            echo "############################################################"; \
+            echo "AVISO: DOS VERSIONES DEL MISMO DRIVER EN EL CLASSPATH"; \
+            echo "  ${duplicados}"; \
+            echo ""; \
+            echo "Cual gana depende del orden del classloader, que NO esta"; \
+            echo "definido: puede comportarse distinto en el driver y en los"; \
+            echo "executors sin motivo aparente."; \
+            echo "Para fijar una version, use el MISMO nombre de archivo que el"; \
+            echo "descargado para reemplazarlo, en vez de anadir un segundo."; \
+            echo "############################################################"; \
+        fi; \
+    fi; \
+    rm -rf /tmp/jars-propios; \
+    chown -R airflow:root /opt/airflow/jars; \
+    chmod 644 /opt/airflow/jars/*.jar 2>/dev/null || true; \
+    echo ""; \
+    echo "=== classpath JDBC final de la imagen ==="; \
+    ls -la /opt/airflow/jars/
 
 # ----------------------------------------------------------------------------
 # Capa airflow: paquetes de Python
@@ -304,6 +464,28 @@ RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
 
 # (Aqui habia un segundo pip install identico al anterior, con menos paquetes.
 #  Era una capa entera de build repetida sin efecto: se quito.)
+
+# ----------------------------------------------------------------------------
+# Herramientas de prueba
+# ----------------------------------------------------------------------------
+# Sin esto, la suite de airflow/tests/unit/ NO se puede ejecutar dentro del
+# contenedor, aunque la cabecera de cada archivo de test diga
+#
+#     docker compose exec airflow-scheduler pytest /opt/airflow/tests/unit -v
+#
+# Unas pruebas que solo corren en la maquina de quien las escribio son pruebas
+# que el equipo deja de correr. Van con --constraint como el resto, para no
+# arrastrar una version de una libreria comun que rompa Airflow.
+#
+# pytest-cov porque la plantilla de CI mide cobertura con --cov.
+#
+# Peso: unos pocos MB. Es mucho menos de lo que cuesta no poder verificar la
+# imagen desde dentro cuando algo falla solo en el contenedor, que es
+# justamente cuando mas falta hace.
+# ----------------------------------------------------------------------------
+RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
+        "pytest" \
+        "pytest-cov"
 
 # ----------------------------------------------------------------------------
 # pyspark: DEBE coincidir con la version del cluster, y por eso va aparte.

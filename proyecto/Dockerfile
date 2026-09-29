@@ -1,0 +1,451 @@
+# ============================================================================
+# IMAGEN AIRFLOW PERSONALIZADA
+# ----------------------------------------------------------------------------
+# La imagen oficial apache/airflow NO trae:
+#   - spark-submit          (lo necesita SparkSubmitOperator)
+#   - drivers JDBC          (SQL Server, DB2)
+#   - clientes Python de BD (pymssql, ibm_db)
+#
+# Construir:
+#   docker build -t airflow-bsg:2.11.2 .
+#
+# Luego en tu .env:
+#   AIRFLOW_IMAGE=airflow-bsg:2.11.2
+#
+# Y levantar normal. Los contenedores usaran esta imagen en vez de la oficial.
+# ============================================================================
+
+FROM apache/airflow:2.11.2-python3.11
+
+# ----------------------------------------------------------------------------
+# Capa root: paquetes de sistema, Java y Spark
+# ----------------------------------------------------------------------------
+USER root
+
+ARG SPARK_VERSION=3.5.3
+ARG HADOOP_VERSION=3
+
+# Java es requisito de spark-submit y del puente JDBC (JayDeBeApi/JPype).
+# procps lo usa spark-submit internamente (llama a "ps").
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        openjdk-17-jre-headless \
+        procps \
+        curl \
+        gnupg2 \
+        gcc g++ \
+        unixodbc unixodbc-dev \
+        pkg-config \
+        default-libmysqlclient-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# ----------------------------------------------------------------------------
+# ODBC Driver 18 de Microsoft + cliente Kerberos
+# ----------------------------------------------------------------------------
+# NECESARIO si tu SQL Server usa autenticacion integrada de Windows/AD.
+# pymssql (que es lo que trae el provider mssql) NO soporta auth integrada:
+# solo usuario y contrasena de SQL. Con AD hay que ir por ODBC + Kerberos.
+#
+# AVISO: este paso descarga de packages.microsoft.com. En muchas redes
+# corporativas ese host esta bloqueado y el build falla aqui. Si te pasa,
+# descarga los .deb desde una maquina con salida y copialos con COPY.
+#
+# La imagen base es Debian 12 (bookworm). Si cambias de imagen base, ajusta
+# la ruta de la lista de paquetes.
+ARG INSTALAR_ODBC=true
+RUN if [ "$INSTALAR_ODBC" = "true" ]; then \
+      set -e; \
+      curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+        | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
+      echo "deb [signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" \
+        > /etc/apt/sources.list.d/mssql-release.list && \
+      apt-get update && \
+      ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 && \
+      DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends krb5-user && \
+      apt-get clean && rm -rf /var/lib/apt/lists/*; \
+    else \
+      echo "ODBC omitido (INSTALAR_ODBC=false)"; \
+    fi
+
+# ----------------------------------------------------------------------------
+# ODBC de IBM i (AS/400) — para Bantotal por ODBC
+# ----------------------------------------------------------------------------
+# El driver se llama "IBM i Access ODBC Driver" y viene en el paquete
+# ibm-iaccess, que IBM publica en un repositorio APT/YUM PUBLICO: no hace falta
+# usuario de IBM ni pasar por Entitled Systems Support para instalarlo.
+#
+#     Nombre del driver:  IBM i Access ODBC Driver 64-bit
+#     Biblioteca:         /opt/ibm/iaccess/lib64/libcwbodbc.so
+#
+# unixODBC lo arrastra el propio paquete como dependencia, y ademas ya se
+# instalo mas arriba junto con el driver de SQL Server.
+#
+# SOBRE LA LICENCIA
+# El paquete se descarga e instala sin entitlement. Distinto es si el USO de
+# ODBC contra su sistema requiere la licencia IBM i Access Family (5770-XW1):
+# IBM documenta que la emulacion 5250 y Data Transfer dejaron de necesitarla a
+# partir de ACS 1.1.9.1, pero no encontre una declaracion igual de explicita
+# para ODBC. Confirmelo con su representante de IBM antes de usarlo en
+# produccion.
+#
+# Para el pipeline, JDBC evita esa duda por completo: JTOpen es open source
+# bajo IBM Public License y no depende de ninguna licencia de cliente.
+#
+# Si el repositorio esta bloqueado en la red corporativa, el build NO falla:
+# la imagen queda sin ODBC de IBM i y con JDBC, que es suficiente.
+# ----------------------------------------------------------------------------
+ARG INSTALAR_ODBC_IBMI=true
+RUN if [ "$INSTALAR_ODBC_IBMI" = "true" ]; then \
+      ( set -e; \
+        curl -fsSL https://public.dhe.ibm.com/software/ibmi/products/odbc/debs/dists/1.1.0/ibmi-acs-1.1.0.list \
+          -o /etc/apt/sources.list.d/ibmi-acs.list && \
+        curl -fsSL https://public.dhe.ibm.com/software/ibmi/products/odbc/debs/dists/1.1.0/Release.key \
+          | gpg --dearmor -o /usr/share/keyrings/ibmi-acs.gpg && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends ibm-iaccess && \
+        apt-get clean && rm -rf /var/lib/apt/lists/* ) \
+      || echo "AVISO: no se instalo el ODBC de IBM i (red bloqueada?). Use JDBC (jt400)."; \
+    else \
+      echo "ODBC de IBM i omitido (INSTALAR_ODBC_IBMI=false)"; \
+    fi
+
+# Deja constancia en el log del build de que drivers ODBC quedaron registrados.
+RUN echo "=== Drivers ODBC registrados ===" && \
+    ( odbcinst -q -d || echo "(ninguno)" )
+
+# ----------------------------------------------------------------------------
+# Java 8, JUNTO a Java 17 (no en lugar de)
+# ----------------------------------------------------------------------------
+# POR QUE LOS DOS
+#
+#   Java 17  lo exige el resto del stack: Spark 3.5.3 y el driver
+#            mssql-jdbc-12.8.1.jre11, cuyo sufijo .jre11 significa
+#            literalmente "necesita Java 11 o superior". Con Java 8 ese jar
+#            NO carga.
+#
+#   Java 8   lo piden clientes y herramientas antiguas: drivers JDBC
+#            propietarios compilados para 1.8, utilidades de proveedor, o un
+#            servidor que solo negocia cifrados que la JVM moderna ya retiro.
+#
+# Los dos conviven sin estorbarse porque JAVA_HOME sigue apuntando a 17: nada
+# de lo que hoy funciona cambia. Java 8 queda en una ruta conocida, para cuando
+# algo lo pida:
+#
+#     JAVA_HOME=$JAVA_HOME_8 spark-submit ...      # un comando suelto
+#     JAVA_HOME=$JAVA_HOME_8                       # o por entorno del servicio
+#
+# ATENCION: UNA JVM POR PROCESO
+# JPype, que es lo que usa jaydebeapi por debajo, arranca UNA sola JVM por
+# proceso de Python y no se puede reiniciar ni cambiar de version en caliente.
+# Dentro de una misma tarea de Airflow se usa Java 8 o Java 17, nunca los dos.
+# Por eso se descargan las DOS variantes del driver de SQL Server y el codigo
+# elige la que corresponde a la JVM con la que arranco (ver s2sql_comun.py).
+#
+# DE DONDE SALE
+# Debian 12 (bookworm) ya NO trae openjdk-8: se quedo en buster. Se usa Temurin,
+# de Adoptium, que es la continuacion del OpenJDK 8 de AdoptOpenJDK.
+#
+# Si packages.adoptium.net esta bloqueado en la red, el build NO falla: el paso
+# tolera el error y la imagen sale con Java 17 solamente, con un aviso. En ese
+# caso descargue el tar.gz de Temurin 8 desde una maquina con salida y
+# descomprimalo con COPY en /usr/lib/jvm/temurin-8-jdk-amd64.
+# ----------------------------------------------------------------------------
+# El codename se saca de /etc/os-release y no se escribe a mano: si algun dia
+# se cambia la imagen base a trixie, esta linea sigue valiendo.
+#
+# Despues del install se crea el enlace /usr/lib/jvm/java-8. El paquete de
+# Adoptium se instala en un directorio cuyo nombre incluye la arquitectura
+# (temurin-8-jdk-amd64, -arm64...), asi que fijar esa ruta a mano serviria en
+# una maquina y fallaria en otra. El enlace la normaliza.
+ARG INSTALAR_JAVA8=true
+RUN if [ "$INSTALAR_JAVA8" = "true" ]; then \
+      ( set -e; \
+        codename=$(awk -F= '/^VERSION_CODENAME/{print $2}' /etc/os-release); \
+        curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+          | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg && \
+        echo "deb [signed-by=/usr/share/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${codename} main" \
+          > /etc/apt/sources.list.d/adoptium.list && \
+        apt-get update && \
+        apt-get install -y --no-install-recommends temurin-8-jdk && \
+        apt-get clean && rm -rf /var/lib/apt/lists/*; \
+        ruta=$(ls -d /usr/lib/jvm/temurin-8-* 2>/dev/null | head -1); \
+        test -n "$ruta"; \
+        ln -sfn "$ruta" /usr/lib/jvm/java-8; \
+        echo "Java 8 enlazado: /usr/lib/jvm/java-8 -> $ruta" ) \
+      || echo "AVISO: no se instalo Java 8 (red bloqueada?). La imagen queda con Java 17."; \
+    else \
+      echo "Java 8 omitido (INSTALAR_JAVA8=false)"; \
+    fi
+
+# Rutas estables de las dos JVM. JAVA_HOME sigue siendo 17 a proposito: es lo
+# que usan spark-submit y el driver .jre11, y no se toca.
+ENV JAVA_HOME_17=/usr/lib/jvm/java-17-openjdk-amd64
+ENV JAVA_HOME_8=/usr/lib/jvm/java-8
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# El build no falla si Java 8 no entro: solo lo deja dicho, para que se vea en
+# la salida de docker build y no se descubra meses despues en una tarea.
+RUN echo "=== JVM disponibles ===" && \
+    "${JAVA_HOME_17}/bin/java" -version 2>&1 | head -1 && \
+    ( "${JAVA_HOME_8}/bin/java" -version 2>&1 | head -1 \
+      || echo "Java 8: NO INSTALADO. Reconstruya con salida a packages.adoptium.net" ) && \
+    echo "JAVA_HOME por defecto = ${JAVA_HOME}"
+
+# --- Cliente de Spark -------------------------------------------------------
+# Debe coincidir con la version del cluster (SPARK_IMAGE_TAG en tu .env).
+# Si no coinciden, spark-submit falla con errores de serializacion poco claros.
+RUN curl -fSL \
+      "https://dlcdn.apache.org/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz" \
+      -o /tmp/spark.tgz \
+ || curl -fSL \
+      "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz" \
+      -o /tmp/spark.tgz \
+ && tar -xzf /tmp/spark.tgz -C /opt \
+ && mv "/opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}" /opt/spark \
+ && rm /tmp/spark.tgz
+
+ENV SPARK_HOME=/opt/spark
+ENV PATH="${SPARK_HOME}/bin:${PATH}"
+
+# ============================================================================
+# DRIVERS JDBC — se descargan UNA VEZ, al construir la imagen
+# ----------------------------------------------------------------------------
+# Formato de cada entrada:   grupo:artefacto:version:nombre_destino.jar
+#
+# Anadir un motor nuevo es agregar una linea. Los jars quedan en
+# /opt/airflow/jars y los usan tanto Airflow (provider jdbc) como Spark
+# (spark-submit --jars).
+#
+# VERSIONES COMPROBADAS CONTRA MAVEN CENTRAL
+#
+# Las cinco coordenadas se verificaron una por una en repo1.maven.org. Existen,
+# y estos son sus tamanos y fechas de publicacion reales:
+#
+#   mssql-jdbc               12.8.1.jre11            publicado 2024-08-22
+#   jcc (DB2)                11.5.9.0    6.5 MB      publicado 2023-11-17
+#   mysql-connector-j        9.1.0       2.6 MB      publicado 2024-10-14
+#   postgresql               42.7.4      1.1 MB      publicado 2024-08-22
+#   singlestore-jdbc-client  1.2.7       713 KB      publicado 2025-01-08
+#
+# Si alguna diera 404 al construir seria por un bloqueo de red, no por una
+# coordenada mal escrita. En ese caso descargue los jars desde una maquina con
+# salida a Internet y copielos con COPY en vez de usar curl.
+#
+# Nota sobre mssql-jdbc: el sufijo .jre11 forma parte de la VERSION, no del
+# nombre del artefacto. Por eso la URL lo lleva dos veces
+# (.../12.8.1.jre11/mssql-jdbc-12.8.1.jre11.jar) y asi debe ser.
+# ============================================================================
+
+# LAS DOS VARIANTES DE mssql-jdbc, A PROPOSITO
+#
+# El sufijo jreNN de este driver NO es cosmetico: dice para que bytecode se
+# compilo el jar.
+#
+#     mssql-jdbc.jar        12.8.1.jre11   necesita Java 11 o superior
+#     mssql-jdbc-jre8.jar   12.8.1.jre8    corre en Java 8
+#
+# Como la imagen trae las dos JVM y JPype solo puede levantar UNA por proceso,
+# el codigo mira con que Java arranco y elige el jar que le corresponde. Cargar
+# el jar equivocado da un UnsupportedClassVersionError, cuyo mensaje habla de
+# "class file version 55.0" y no menciona en ningun momento que el problema sea
+# la version de Java, asi que es de los errores que mas tiempo hacen perder.
+#
+# La 12.8 publica ambas variantes y esta soportada hasta julio de 2029 segun la
+# matriz de Microsoft. Las dos sirven contra SQL Server 2022.
+# ----------------------------------------------------------------------------
+# JTOpen (jt400) — EL DRIVER DE BANTOTAL / IBM i
+# ----------------------------------------------------------------------------
+# Es el IBM Toolbox for Java, el driver correcto para Db2 for i (AS/400).
+# OJO: com.ibm.db2:jcc, que ya estaba en esta lista, es el driver de Db2 para
+# LUW y z/OS. NO es el de IBM i. Para Bantotal hace falta jt400.
+#
+#     Clase del driver:  com.ibm.as400.access.AS400JDBCDriver
+#
+# LA VERSION DEPENDE DE SU RELEASE DE IBM i. Esta es la matriz oficial del
+# proyecto (github.com/IBM/JTOpen), y la columna que importa es "conecta a",
+# porque nosotros conectamos DESDE el contenedor HACIA el AS/400; la columna
+# "instala en" solo aplica si el codigo corriera dentro del propio IBM i:
+#
+#     JTOpen      Java minimo   conecta a IBM i
+#     ----------  -----------   ---------------
+#     21.x        8             7.3 o superior     <- ACTIVA (21.0.7, jul-2026)
+#     20.x        7             7.3 o superior
+#     11.x        1.1           7.3 o superior
+#     10.x        1.1           7.2 o superior     <- para IBM i 7.2
+#
+# Si su AS/400 es 7.3 o 7.4, deje la linea de abajo como esta.
+# Si es 7.2, comente la 21.0.7 y descomente la 10.7.
+# Si es 7.1 o anterior, ninguna de estas sirve: hay que bajar un JTOpen 9.x o
+# anterior de sourceforge.net/projects/jt400 y copiarlo con COPY.
+#
+# Para saber su release, ejecute en el AS/400:
+#     SELECT OS_VERSION, OS_RELEASE FROM SYSIBMADM.ENV_SYS_INFO;
+# o en linea de comandos:  DSPPTF   (arriba a la derecha sale VxRyMz)
+#
+# El jar por defecto de JTOpen esta compilado para Java 8, asi que corre tanto
+# con JAVA_HOME=17 como con JAVA_HOME_8. A diferencia de mssql-jdbc, aqui UN
+# solo jar cubre las dos JVM y no hay que elegir variante.
+# ----------------------------------------------------------------------------
+ARG JDBC_DRIVERS="\
+net.sf.jt400:jt400:21.0.7:jt400.jar \
+com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11:mssql-jdbc.jar \
+com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre8:mssql-jdbc-jre8.jar \
+com.ibm.db2:jcc:11.5.9.0:db2-jcc.jar \
+com.mysql:mysql-connector-j:9.1.0:mysql-jdbc.jar \
+org.postgresql:postgresql:42.7.4:postgresql-jdbc.jar \
+com.singlestore:singlestore-jdbc-client:1.2.7:singlestore-jdbc.jar \
+"
+
+# Alternativa para IBM i 7.2: comente la linea de jt400 21.0.7 de arriba y
+# descomente esta, reemplazandola en JDBC_DRIVERS.
+#     net.sf.jt400:jt400:10.7:jt400.jar
+#
+# JTOpen 10.7 esta compilado para Java 1.1. Carga sin problema en una JVM
+# moderna (el bytecode antiguo es compatible hacia adelante), pero si diera
+# guerra con Java 17, corra la tarea con JAVA_HOME=$JAVA_HOME_8.
+
+ARG MAVEN_REPO=https://repo1.maven.org/maven2
+
+
+
+
+RUN set -e; \
+    mkdir -p /opt/airflow/jars; \
+    fallidos=""; \
+    for spec in ${JDBC_DRIVERS}; do \
+        grupo=$(echo "$spec"    | cut -d: -f1); \
+        artefacto=$(echo "$spec"| cut -d: -f2); \
+        version=$(echo "$spec"  | cut -d: -f3); \
+        destino=$(echo "$spec"  | cut -d: -f4); \
+        ruta=$(echo "$grupo" | tr '.' '/'); \
+        url="${MAVEN_REPO}/${ruta}/${artefacto}/${version}/${artefacto}-${version}.jar"; \
+        echo ">>> ${destino}  <-  ${artefacto} ${version}"; \
+        if curl -fSL --retry 3 --retry-delay 2 -o "/opt/airflow/jars/${destino}" "$url"; then \
+            echo "    ok  $(du -h /opt/airflow/jars/${destino} | cut -f1)"; \
+        else \
+            echo "    FALLO: $url"; \
+            rm -f "/opt/airflow/jars/${destino}"; \
+            fallidos="${fallidos} ${artefacto}"; \
+        fi; \
+    done; \
+    chown -R airflow:root /opt/airflow/jars; \
+    chmod 644 /opt/airflow/jars/*.jar 2>/dev/null || true; \
+    echo ""; \
+    echo "=== jars instalados ==="; \
+    ls -la /opt/airflow/jars/; \
+    if [ -n "${fallidos}" ]; then \
+        echo ""; \
+        echo "AVISO: no se descargaron:${fallidos}"; \
+        echo "La imagen se construye igual. Los motores afectados no funcionaran"; \
+        echo "hasta que corrija la version en JDBC_DRIVERS y reconstruya."; \
+    fi
+
+# ----------------------------------------------------------------------------
+# Capa airflow: paquetes de Python
+# ----------------------------------------------------------------------------
+# Nunca instalar como root: rompe los permisos del site-packages de la imagen.
+USER airflow
+
+# El archivo de constraints es lo que evita que pip rompa las dependencias de
+# Airflow al resolver las de los providers. Sin esto, tarde o temprano te
+# quedas con una version incompatible de alguna libreria comun.
+ARG AIRFLOW_VERSION=2.11.2
+ARG PYTHON_VERSION=3.11
+ARG CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+
+# ----------------------------------------------------------------------------
+# Un provider por motor. Con esto, cada Connection de Airflow resuelve su hook
+# automaticamente segun el conn_type, sin codigo adicional.
+#
+# SIN FIJAR VERSIONES, A PROPOSITO.
+#
+# El archivo de constraints ya trae un conjunto de versiones probadas entre si
+# para esta version de Airflow. Fijar ademas una version a mano produce esto:
+#
+#     The user requested apache-airflow-providers-microsoft-mssql==4.7.0
+#     The user requested (constraint) ...==4.5.0
+#     ERROR: ResolutionImpossible
+#
+# O se usa el archivo de constraints, o se fijan versiones. Las dos cosas a la
+# vez se contradicen. Se elige el archivo: es el conjunto que Apache probo.
+#
+# Versiones que resultan con Airflow 2.11.2 (comprobadas en el archivo):
+#     microsoft-mssql 4.5.0   postgres 6.6.0   mysql 6.5.0
+#     jdbc 5.4.0              odbc 4.12.0      common-sql 1.32.0
+#     apache-spark 5.5.1
+# ----------------------------------------------------------------------------
+RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
+        "apache-airflow-providers-microsoft-mssql" \
+        "apache-airflow-providers-postgres" \
+        "apache-airflow-providers-mysql" \
+        "apache-airflow-providers-jdbc" \
+        "apache-airflow-providers-odbc" \
+        "apache-airflow-providers-common-sql" \
+        "apache-airflow-providers-apache-spark" \
+        "pyodbc" \
+        "pymssql" \
+        "psycopg2-binary" \
+        "mysqlclient" \
+        "jaydebeapi" \
+        "pandas" \
+        "pyarrow"
+
+# (Aqui habia un segundo pip install identico al anterior, con menos paquetes.
+#  Era una capa entera de build repetida sin efecto: se quito.)
+
+# ----------------------------------------------------------------------------
+# Herramientas de prueba
+# ----------------------------------------------------------------------------
+# Sin esto, la suite de airflow/tests/unit/ NO se puede ejecutar dentro del
+# contenedor, aunque la cabecera de cada archivo de test diga
+#
+#     docker compose exec airflow-scheduler pytest /opt/airflow/tests/unit -v
+#
+# Unas pruebas que solo corren en la maquina de quien las escribio son pruebas
+# que el equipo deja de correr. Van con --constraint como el resto, para no
+# arrastrar una version de una libreria comun que rompa Airflow.
+#
+# pytest-cov porque la plantilla de CI mide cobertura con --cov.
+#
+# Peso: unos pocos MB. Es mucho menos de lo que cuesta no poder verificar la
+# imagen desde dentro cuando algo falla solo en el contenedor, que es
+# justamente cuando mas falta hace.
+# ----------------------------------------------------------------------------
+RUN pip install --no-cache-dir --constraint "${CONSTRAINT_URL}" \
+        "pytest" \
+        "pytest-cov"
+
+# ----------------------------------------------------------------------------
+# pyspark: DEBE coincidir con la version del cluster, y por eso va aparte.
+#
+# El archivo de constraints fija pyspark 4.1.1, pero el cluster de este
+# proyecto es Spark 3.5.3. Con versiones distintas entre cliente y cluster, el
+# envio de trabajos falla con errores de serializacion que en ningun momento
+# mencionan la version — es de los diagnosticos mas largos que hay.
+#
+# Se instala sin --constraint para poder bajarlo a 3.5.3. El provider de Spark
+# pide pyspark>=3.5.2, asi que 3.5.3 lo satisface.
+# ----------------------------------------------------------------------------
+RUN pip install --no-cache-dir "pyspark==${SPARK_VERSION}" \
+ && python -c "import pyspark; print('pyspark', pyspark.__version__)"
+
+# SingleStore habla el protocolo de MySQL, asi que el provider de MySQL le
+# sirve para la mayoria de los casos. Este cliente propio anade lo especifico
+# (tipos vectoriales, notas de version). Tolera fallo: no es imprescindible.
+RUN pip install --no-cache-dir "singlestoredb" || \
+    echo "AVISO: singlestoredb no se instalo. Use el provider de MySQL para SingleStore."
+
+# ibm_db (cliente nativo de DB2) descarga el driver de IBM al instalarse.
+# Va aparte y tolera fallo: en muchas redes corporativas esa descarga esta
+# bloqueada, y el JDBC de arriba ya cubre DB2. Si falla, no rompe el build.
+RUN pip install --no-cache-dir "ibm-db" "ibm-db-sa" || \
+    echo "AVISO: ibm-db no se instalo. Usa DB2 via JDBC (JdbcHook)."
+
+# Ruta donde los DAGs esperan encontrar los jars
+ENV JDBC_DRIVER_PATH=/opt/airflow/jars
+
+# Comprobacion de que lo esencial quedo instalado
+COPY --chown=airflow:root scripts/verificar_drivers.py /opt/airflow/verificar_drivers.py
+
+RUN python /opt/airflow/verificar_drivers.py --build
