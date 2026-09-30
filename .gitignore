@@ -1,6 +1,13 @@
 # SECRETOS - nunca subir
-#.env
-# .env.local
+#
+# La linea .env estuvo COMENTADA hasta el 2026-09-30, asi que el archivo quedo
+# rastreado por git con las claves reales dentro. Descomentarla no lo saca del
+# indice: hace falta un
+#     git rm --cached .env
+# y rotar lo que ya viajo en el historial.
+.env
+.env.*
+*.bak
 *.key
 *.pem
 *.jks
@@ -21,6 +28,11 @@ tls/
 #     python3 scripts/generar_quadlet.py
 rhel/quadlet/
 bundle-offline/
+
+# Cuarentena de la limpieza del 2026-09-30: duplicados exactos, salidas
+# superadas y restos de empaquetados viejos. Nada de aqui se usa. Revise y
+# borre cuando quiera; hasta entonces no estorba ni se versiona.
+_archivo/
 
 # Los .env.windows / .env.ubuntu / .env.rhel que se entregan traen secretos
 # generados. Si vas a versionarlos, reemplaza los valores por placeholders.

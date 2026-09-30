@@ -228,7 +228,7 @@ with DAG(
             ),
         ),
     },
-    tags=["etl", "parquet", "singlestore", "data-engineering", "produccion"],
+    tags=["manual", "etl", "parquet", "singlestore", "data-engineering", "produccion"],
 ) as dag:
 
     # execution_timeout es obligatorio: sin el, una consulta trabada contra BT

@@ -235,7 +235,7 @@ with DAG(
             ),
         ),
     },
-    tags=["s2sql", "singlestore", "sqlserver", "export", "produccion"],
+    tags=["manual", "s2sql", "singlestore", "sqlserver", "export", "produccion"],
 ) as dag:
 
     inicio = EmptyOperator(task_id="inicio")

@@ -151,7 +151,12 @@ with DAG(
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    tags=["produccion", "orquestador", "json"],
+    # El manifiesto decide cuantas tareas se crean, asi que el peor caso no
+    # esta acotado por el codigo. execution_timeout (2h, en default_args)
+    # protege cada tarea por separado, pero N tareas en serie pueden sumar
+    # mucho mas. Este es el tope duro de la corrida completa.
+    dagrun_timeout=timedelta(hours=12),
+    tags=["disparado", "produccion", "orquestador", "json"],
     doc_md=__doc__,
 ) as dag:
 

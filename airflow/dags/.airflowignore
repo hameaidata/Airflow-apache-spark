@@ -57,3 +57,26 @@ production/etl_s2sql/
 # funciones. Sin esta linea el scheduler importaria jaydebeapi cada 30
 # segundos, y con el JPype: una JVM por cada pasada del parser.
 production/etl_bt2sql/
+
+# ----------------------------------------------------------------------------
+# Agregado el 2026-09-30, al hacer cumplir docs/CONVENCIONES.md
+# ----------------------------------------------------------------------------
+
+# examples/ es una copia vieja de production/etl/. Esa carpeta si estaba
+# ignorada; esta no, asi que el scheduler venia registrando
+# "carga_parquet_singlestore" y "Extraer_datos_bt" desde aqui -los mismos
+# dag_id que production/etl/- e importando pyodbc, ibm_db, singlestoredb,
+# pyarrow y pandas cada 30 segundos para hacerlo.
+examples/
+
+# templates/ son plantillas para copiar, no DAGs. plantilla_dag.py registra
+# "PLANTILLA_cambiar_este_nombre" y plantilla_conexion.py "VALIDAR_CONEXIONES":
+# dos DAGs en la interfaz que nadie quiso crear.
+templates/
+
+# Scripts de pyspark sueltos, no DAGs. No definen ningun DAG, asi que el
+# scheduler los importa, ejecuta su codigo a nivel de modulo y no obtiene
+# nada. Ademas llevan credenciales en texto plano.
+# ESTO NO ES LA SOLUCION: hay que sacarlos de dags/ y rotar esas claves.
+# Es una venda mientras tanto.
+production/test_.*\.py

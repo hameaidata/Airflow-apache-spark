@@ -40,14 +40,28 @@ if ($Ayuda) {
 $Raiz = Split-Path -Parent $PSScriptRoot
 if (-not $Destino) { $Destino = Join-Path $Raiz 'bundle-offline' }
 
-# Deben coincidir con el .env y el Dockerfile.
-$ImagenPropia = 'airflow-bsg:2.11.2'
+# LAS DOS IMAGENES PROPIAS. Deben coincidir con el .env y el Dockerfile. Ninguna de las dos se puede construir en el
+# servidor aislado: necesitan Internet para bajar los drivers de Maven y los
+# paquetes del sistema. Si no viajan aqui, alla no hay forma de obtenerlas.
+$ImagenesPropias = @(
+    'airflow-bsg:2.11.2',
+    'spark-bsg:3.5.3'
+)
+
+# OJO: aqui va apache/spark SOLO como respaldo. La que el .env nombra y la que
+# los servicios de Spark usan de verdad es spark-bsg, que esta arriba.
+# Durante meses este script exportaba apache/spark y NO spark-bsg, y el
+# resultado era un paquete que parecia completo y dejaba el servidor destino
+# sin poder levantar Spark.
 $ImagenesBase = @(
     'postgres:16-alpine',
     'redis:7-alpine',
-    'apache/spark:3.5.3',
-    'busybox:1.36'#,         # lo usa el contenedor de permisos; sin el, no arranca
-    # 'nginx:1.27-alpine'     # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
+    'busybox:1.36',          # contenedor de permisos; sin el, el stack no arranca
+    'nginx:1.27-alpine',     # proxy TLS; 1.27 porque "http2 on" necesita >= 1.25.1
+    # Registro privado interno. Son 25 MB y es la unica forma de tener un
+    # registro dentro de la red aislada: ninguno de la nube se alcanza desde
+    # alla. Si no viaja aqui, la opcion desaparece para siempre.
+    'registry:2'
 )
 
 Write-Host ''
@@ -66,17 +80,22 @@ if ($LASTEXITCODE -ne 0) {
 }
 Escribir-Ok 'Docker responde'
 
-docker image inspect $ImagenPropia 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Escribir-Fallo "No existe la imagen $ImagenPropia."
+$faltantes = @()
+foreach ($img in $ImagenesPropias) {
+    docker image inspect $img 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { $faltantes += $img }
+}
+if ($faltantes.Count -gt 0) {
+    Escribir-Fallo ("Faltan imagenes propias: " + ($faltantes -join ', '))
     Write-Host ''
-    Write-Host '  Construyala primero, en esta misma maquina:'
+    Write-Host '  Construyalas AHORA, mientras todavia tenga Internet:'
     Write-Host '      .\scripts\construir_imagen.ps1'
     Write-Host ''
-    Write-Host '  Es el paso que NO se puede hacer en el servidor aislado.'
+    Write-Host '  En el servidor aislado NO se pueden construir: el build baja'
+    Write-Host '  los drivers JDBC de Maven y paquetes del sistema.'
     exit 1
 }
-Escribir-Ok "Imagen propia encontrada: $ImagenPropia"
+Escribir-Ok ("Imagenes propias encontradas: " + ($ImagenesPropias -join ', '))
 
 $dirImagenes = Join-Path $Destino 'imagenes'
 $dirProyecto = Join-Path $Destino 'proyecto'
@@ -114,7 +133,10 @@ function Guardar-Imagen {
     return $true
 }
 
-if (-not (Guardar-Imagen $ImagenPropia 'airflow-bsg')) { $fallidas += $ImagenPropia }
+foreach ($img in $ImagenesPropias) {
+    $nombre = $img -replace '[/:]', '_'
+    if (-not (Guardar-Imagen $img $nombre)) { $fallidas += $img }
+}
 foreach ($img in $ImagenesBase) {
     $nombre = $img -replace '[/:]', '_'
     if (-not (Guardar-Imagen $img $nombre)) { $fallidas += $img }
@@ -124,15 +146,33 @@ foreach ($img in $ImagenesBase) {
 Write-Host ''
 Escribir-Info 'Copiando archivos del proyecto'
 
+# SE BORRA proyecto\ ENTERO ANTES DE COPIAR.
+#
+# Copy-Item -Force sobrescribe lo que ya esta, pero NO borra lo que sobra. Sin
+# esta linea, un archivo que se renombro o se elimino en el repositorio se
+# queda vivo en el paquete para siempre. El caso concreto: al renombrar
+# dag_bt2sql_stg.py a dag_stg_bt2sql_carga.py, un paquete viejo llevaria LOS
+# DOS, y el servidor aislado registraria BT2SQL_STG y STG_BT2SQL_CARGA a la
+# vez: dos DAGs escribiendo en las mismas tablas STG.
+# Es barato -son megabytes- y quita una clase entera de fallo.
+if (Test-Path $dirProyecto) { Remove-Item $dirProyecto -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $dirProyecto | Out-Null
+
 # Lista explicita y no "copiar todo": evita arrastrar .git, logs, parquet de
 # pruebas y -lo importante- un .env con secretos reales de desarrollo.
 $rutas = @(
     'docker-compose.ubuntu.yml', 'docker-compose.windows.yml', 'docker-compose.rhel.yml',
-    '.env.ubuntu', '.env.windows', '.env.rhel',
+    # No se listan .env.ubuntu / .env.windows / .env.rhel: no existen en el
+    # repositorio, y cada corrida imprimia tres avisos que no significaban
+    # nada. El destino genera su propio .env con setup.sh, que es lo correcto.
     'Dockerfile', 'setup.sh', 'setup.ps1', 'docker-compose.tls.yml', 'nginx',
-    'README.md', 'README-TI.md', 'README-TI-REDUCIDO.md', 'README-NGINX.md',
-    'README-REQUERIMIENTOS-FUNCIONAMIENTO.md', 'README_DOCKER.md',
-    'airflow', 'scripts', 'spark', 'docs'
+    # Solo README.md: los demas se movieron a docs/, que ya viaja entero.
+    'README.md',
+    'airflow', 'scripts', 'spark', 'docs',
+    # Sin sql/ no viaja NINGUN DDL: ni las tablas de control ni los
+    # stored procedures. El destino quedaria sin donde escribir.
+    'sql', 'requirements.txt', 'requirements-dev.txt',
+    'infrastructure', 'rhel', 'Dockerfile.offline'
 )
 foreach ($r in $rutas) {
     $origen = Join-Path $Raiz $r
@@ -145,11 +185,36 @@ foreach ($r in $rutas) {
 
 # Nunca viaja un .env real: lleva secretos y el destino debe generar los suyos.
 Remove-Item (Join-Path $dirProyecto '.env') -Force -ErrorAction SilentlyContinue
+# Tambien cualquier respaldo: .env.bak lleva los MISMOS secretos.
+Get-ChildItem $dirProyecto -Filter '.env.*' -Force -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 Get-ChildItem $dirProyecto -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Get-ChildItem $dirProyecto -Recurse -Directory -Filter 'logs' -ErrorAction SilentlyContinue |
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 Escribir-Ok 'Proyecto copiado (sin .env, sin logs, sin __pycache__)'
+
+# --- 2b. Comprobar que lo critico aterrizo -----------------------------------
+# .airflowignore empieza por punto. Si algun dia el copiado se lo salta -o
+# alguien lo excluye sin darse cuenta- el servidor aislado vuelve a registrar
+# los cuatro DAGs de examples/ y templates/, y el de templates ni siquiera
+# compila. Eso se descubriria alla, sin Internet para corregirlo.
+$criticos = @(
+    (Join-Path 'airflow' (Join-Path 'dags' '.airflowignore')),
+    (Join-Path 'airflow' (Join-Path 'dags' (Join-Path 'production' 'dag_stg_bt2sql_carga.py'))),
+    (Join-Path 'airflow' (Join-Path 'tests' (Join-Path 'unit' 'test_convenciones.py'))),
+    (Join-Path 'sql' 'bt2sql'),
+    (Join-Path 'docs' 'ANTES_DE_PERDER_INTERNET.md'),
+    (Join-Path 'spark' 'Dockerfile')
+)
+$ausentes = $criticos | Where-Object { -not (Test-Path (Join-Path $dirProyecto $_)) }
+if ($ausentes.Count -gt 0) {
+    Escribir-Fallo 'El paquete salio incompleto. No aterrizaron:'
+    $ausentes | ForEach-Object { Write-Host ("      " + $_) }
+    Write-Host '  Revise la lista de rutas y vuelva a ejecutar.'
+    exit 1
+}
+Escribir-Ok 'Archivos criticos verificados en el paquete'
 
 # --- 3. Script de carga en el destino ----------------------------------------
 # Se escribe con salto de linea LF: el destino es Linux, y un .sh con CRLF
@@ -177,13 +242,16 @@ done
 
 echo
 echo "=== Imagenes disponibles ==="
-docker images | grep -E "airflow-bsg|postgres|redis|spark|busybox"
+docker images | grep -E "airflow-bsg|spark-bsg|postgres|redis|busybox|nginx|registry"
 
 echo
 echo "=== Que sigue ==="
 echo "  1. cd proyecto"
 echo "  2. ./setup.sh                 genera .env con secretos NUEVOS"
-echo "  3. Confirme en .env:  AIRFLOW_IMAGE=airflow-bsg:2.11.2"
+echo "  3. Confirme en .env las DOS:"
+echo "         AIRFLOW_IMAGE=airflow-bsg:2.11.2"
+echo "         SPARK_IMAGE=spark-bsg:3.5.3"
+echo "     Con la imagen oficial de Apache los jobs mueren con: No suitable driver"
 echo "  4. docker compose -f docker-compose.ubuntu.yml up -d"
 echo
 echo "  NO ejecute 'docker compose pull': intentaria salir a Internet y fallara."

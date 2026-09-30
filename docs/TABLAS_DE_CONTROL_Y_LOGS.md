@@ -31,7 +31,7 @@ pero **no tienen DDL en ningún sitio**.
         │                                        │      CTL.CTL_S2SQL_LOTE
         │                                        │      CTL.CTL_S2SQL_LOG_CARGA
         │                                        │
-        └── BT2SQL_STG ─────────────────────────────────────────► STG
+        └── STG_BT2SQL_CARGA ─────────────────────────────────────────► STG
               CTL_PARAMETROS_PARQUET
               ctl_proceso_parquet
               ctl_carga_stg

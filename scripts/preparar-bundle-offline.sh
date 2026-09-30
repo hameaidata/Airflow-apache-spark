@@ -46,13 +46,27 @@ DESTINO="${1:-${RAIZ}/bundle-offline}"
 
 # Deben coincidir con el .env y el Dockerfile. Si cambia una version alli,
 # cambiela aqui tambien o el paquete llevara una imagen distinta a la esperada.
-IMAGEN_PROPIA="airflow-bsg:2.11.2"
+# LAS DOS IMAGENES PROPIAS. Ninguna se puede construir en el servidor aislado:
+# el build baja los drivers JDBC de Maven y paquetes del sistema. Si no viajan
+# aqui, alla no hay forma de obtenerlas.
+IMAGENES_PROPIAS=(
+    "airflow-bsg:2.11.2"
+    "spark-bsg:3.5.3"
+)
+
+# OJO: apache/spark ya NO va aqui. La que el .env nombra y la que los servicios
+# de Spark usan de verdad es spark-bsg, que esta arriba. Este script exportaba
+# la base durante meses, y el resultado era un paquete que parecia completo y
+# dejaba el destino sin poder levantar Spark.
 IMAGENES_BASE=(
     "postgres:16-alpine"
     "redis:7-alpine"
-    "apache/spark:3.5.3"
-    "busybox:1.36"     # lo usa el contenedor de permisos; sin el, no arranca
-    "nginx:1.27-alpine"  # proxy TLS; 1.27 porque http2 on necesita >= 1.25.1
+    "busybox:1.36"       # contenedor de permisos; sin el, el stack no arranca
+    "nginx:1.27-alpine"  # proxy TLS; 1.27 porque "http2 on" necesita >= 1.25.1
+    # Registro privado interno. Son 25 MB y es la unica forma de tener un
+    # registro dentro de la red aislada: ninguno de la nube se alcanza desde
+    # alla. Si no viaja aqui, la opcion desaparece para siempre.
+    "registry:2"
 )
 
 echo
@@ -72,17 +86,31 @@ ok "Docker responde"
 
 # La imagen propia es el corazon del paquete: lleva Java, Spark, los 5 drivers
 # JDBC y los providers. Si no existe, no hay nada que empaquetar.
-if ! docker image inspect "${IMAGEN_PROPIA}" >/dev/null 2>&1; then
-    fallo "No existe la imagen ${IMAGEN_PROPIA}."
+FALTANTES=""
+for img in "${IMAGENES_PROPIAS[@]}"; do
+    docker image inspect "$img" >/dev/null 2>&1 || FALTANTES="${FALTANTES} ${img}"
+done
+if [ -n "${FALTANTES}" ]; then
+    fallo "Faltan imagenes propias:${FALTANTES}"
     echo
-    echo "  Construyala primero, en esta misma maquina:"
+    echo "  Construyalas AHORA, mientras todavia tenga Internet:"
     echo "      ./scripts/construir_imagen.sh"
     echo
-    echo "  Es el paso que NO se puede hacer en el servidor aislado."
+    echo "  En el servidor aislado NO se pueden construir: el build baja los"
+    echo "  drivers JDBC de Maven y paquetes del sistema."
     exit 1
 fi
-ok "Imagen propia encontrada: ${IMAGEN_PROPIA}"
+ok "Imagenes propias encontradas: ${IMAGENES_PROPIAS[*]}"
 
+# SE BORRA proyecto/ ENTERO ANTES DE COPIAR.
+#
+# cp -r sobrescribe lo que ya esta, pero NO borra lo que sobra. Sin esta linea,
+# un archivo renombrado o eliminado en el repositorio se queda vivo en el
+# paquete para siempre. El caso concreto: al renombrar dag_bt2sql_stg.py a
+# dag_stg_bt2sql_carga.py, un paquete viejo llevaria LOS DOS, y el servidor
+# aislado registraria BT2SQL_STG y STG_BT2SQL_CARGA a la vez: dos DAGs
+# escribiendo en las mismas tablas STG.
+rm -rf "${DESTINO}/proyecto"
 mkdir -p "${DESTINO}/imagenes" "${DESTINO}/proyecto"
 
 # --- 1. Imagenes -------------------------------------------------------------
@@ -118,11 +146,11 @@ info "Copiando archivos del proyecto"
 # pruebas y -lo importante- un .env con secretos reales de desarrollo.
 for ruta in \
     docker-compose.ubuntu.yml docker-compose.windows.yml docker-compose.rhel.yml \
-    .env.ubuntu .env.windows .env.rhel \
     Dockerfile setup.sh setup.ps1 docker-compose.tls.yml nginx \
-    README.md README-TI.md README-TI-REDUCIDO.md \
-    README-REQUERIMIENTOS-FUNCIONAMIENTO.md README_DOCKER.md README-NGINX.md \
-    airflow scripts spark docs
+    README.md \
+    airflow scripts spark docs \
+    sql requirements.txt requirements-dev.txt \
+    infrastructure rhel Dockerfile.offline
 do
     if [ -e "${RAIZ}/${ruta}" ]; then
         cp -r "${RAIZ}/${ruta}" "${DESTINO}/proyecto/"
@@ -132,11 +160,35 @@ do
 done
 
 # Nunca viaja un .env real: lleva secretos y el destino debe generar los suyos.
-rm -f "${DESTINO}/proyecto/.env"
+# Tambien cualquier respaldo: .env.bak lleva los MISMOS secretos.
+rm -f "${DESTINO}/proyecto/.env" "${DESTINO}/proyecto/.env."*
 # Ni logs, ni cache de Python, ni datos de pruebas.
 find "${DESTINO}/proyecto" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
 find "${DESTINO}/proyecto" -type d -name "logs" -exec rm -rf {} + 2>/dev/null
 ok "Proyecto copiado (sin .env, sin logs, sin __pycache__)"
+
+# --- 2b. Comprobar que lo critico aterrizo -----------------------------------
+# .airflowignore empieza por punto. Si algun dia el copiado se lo salta, el
+# servidor aislado vuelve a registrar los cuatro DAGs de examples/ y
+# templates/, y el de templates ni siquiera compila. Eso se descubriria alla,
+# sin Internet para corregirlo.
+AUSENTES=()
+for critico in \
+    airflow/dags/.airflowignore \
+    airflow/dags/production/dag_stg_bt2sql_carga.py \
+    airflow/tests/unit/test_convenciones.py \
+    sql/bt2sql \
+    docs/ANTES_DE_PERDER_INTERNET.md \
+    spark/Dockerfile
+do
+    [ -e "${DESTINO}/proyecto/${critico}" ] || AUSENTES+=("${critico}")
+done
+if [ ${#AUSENTES[@]} -gt 0 ]; then
+    fallo "El paquete salio incompleto. No aterrizaron:"
+    printf '      %s\n' "${AUSENTES[@]}"
+    exit 1
+fi
+ok "Archivos criticos verificados en el paquete"
 
 # --- 3. Script de carga en el destino ----------------------------------------
 cat > "${DESTINO}/cargar_bundle.sh" <<'CARGADOR'
@@ -167,8 +219,11 @@ done
 # nombre no hace nada) y arregla el caso de Podman. Se hace siempre.
 echo
 echo "=== Normalizando nombres de imagen ==="
-for par in \
-    "postgres:16-alpine" "redis:7-alpine" "apache/spark:3.5.3" "busybox:1.36" "nginx:1.27-alpine"
+# Se normalizan las MISMAS que se van a exportar, tomadas de la lista de
+# arriba en vez de repetidas a mano. Antes estaban escritas dos veces y las dos
+# listas se desincronizaron: aqui seguia apache/spark cuando la lista de
+# exportacion ya no la tenia.
+for par in "${IMAGENES_BASE[@]}"
 do
     for prefijo in "docker.io/library/" "docker.io/" "localhost/"; do
         if docker image inspect "${prefijo}${par}" >/dev/null 2>&1; then

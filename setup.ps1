@@ -127,18 +127,28 @@ if (Test-Path ".env") {
 COMPOSE_PROJECT_NAME=airflow-spark
 
 # --- Versiones de imagen ----------------------------------------------------
+# LAS DOS IMAGENES PROPIAS SON OBLIGATORIAS, no opcionales.
+#
+# Antes venian comentadas, con un "descomenta si construiste tu imagen". Ya no:
+# el stack DEPENDE de ellas, y dejarlas comentadas es como se llega a un
+# "No suitable driver" que manda a buscar el problema donde no esta.
+#
+#   airflow-bsg  drivers JDBC (jt400 para Bantotal, mssql-jdbc, singlestore,
+#                postgres, mysql, db2), el ODBC de IBM i, Java 8 junto a
+#                Java 17, y spark-submit.
+#   spark-bsg    Python -que la imagen oficial de Apache NO trae- y los mismos
+#                drivers en `$SPARK_HOME/jars, que es la unica ruta que entra
+#                en el classpath del driver Y de los executors.
+#
+# Se construyen con:
+#   docker build -t airflow-bsg:2.11.2 .
+#   docker build -t spark-bsg:3.5.3 -f spark/Dockerfile .
 AIRFLOW_IMAGE_TAG=2.11.2-python3.11
-# Tras construir tu imagen propia (docker build -t airflow-bsg:2.11.2 .),
-# descomenta la linea siguiente. Es lo que trae SQL Server, DB2 y spark-submit.
-# AIRFLOW_IMAGE=airflow-bsg:2.11.2
+AIRFLOW_IMAGE=airflow-bsg:2.11.2
+SPARK_IMAGE_TAG=3.5.3
+SPARK_IMAGE=spark-bsg:3.5.3
 POSTGRES_IMAGE_TAG=16-alpine
 REDIS_IMAGE_TAG=7-alpine
-SPARK_IMAGE_TAG=3.5.3
-# Imagen de Spark. Por defecto la OFICIAL de Apache.
-# Las imagenes de Bitnami usan variables propias (SPARK_MODE, SPARK_MASTER_URL...)
-# que la oficial no entiende: por eso el compose invoca las clases Java directamente.
-# Si necesitas UDFs de Python en los executors, usa un tag que incluya python3.
-# SPARK_IMAGE=apache/spark:3.5.3
 
 # --- Autenticacion del cluster de Spark -------------------------------------
 # DESACTIVADA por defecto para que el cluster arranque sin friccion.
@@ -179,6 +189,44 @@ AIRFLOW_WEB_PORT=8080
 FLOWER_PORT=5555
 SPARK_MASTER_UI_PORT=8082
 SPARK_MASTER_PORT=7077
+# History Server: donde se ven los jobs Spark YA TERMINADOS. Sin el, cuando un
+# job falla su interfaz muere con el job y no queda nada que mirar.
+SPARK_HISTORY_PORT=18080
+
+# ============================================================================
+# CARPETAS DE PARQUET
+# ----------------------------------------------------------------------------
+# Cada pipeline escribe en la suya. El lado IZQUIERDO es la ruta en esta
+# maquina; el DERECHO es la ruta dentro del contenedor y NO se debe cambiar:
+# es la que guardan las tablas de control y la que abre despues la carga.
+#
+# Si cambia el lado derecho, tiene que cambiar tambien output_dir en la
+# Variable de Airflow correspondiente, o la extraccion escribira en una ruta
+# que no esta montada. Eso NO da error: Docker crea la carpeta DENTRO del
+# contenedor, la corrida sale verde, y los archivos desaparecen al reiniciar.
+# ============================================================================
+
+# Bantotal -> parquet -> STG en SingleStore
+PARQUET_HOST_DIR=./data/parquet
+PARQUET_CONTAINER_DIR=/data/parquet
+
+# SingleStore -> parquet -> SQL Server
+S2SQL_PARQUET_HOST_DIR=./data/s2sql
+S2SQL_PARQUET_CONTAINER_DIR=/data/s2sql
+
+# Bantotal -> parquet -> STG en SQL Server
+BT2SQL_PARQUET_HOST_DIR=./data/bt2sql
+BT2SQL_PARQUET_CONTAINER_DIR=/data/bt2sql
+
+# --- Pools de Airflow -------------------------------------------------------
+# Limitan cuantas tareas golpean cada motor a la vez. Por defecto default_pool
+# para que todo funcione recien instalado.
+#
+# Cuando cree los pools en Admin > Pools, ponga aqui sus nombres. El compose ya
+# los pasa a los contenedores; antes no lo hacia y cambiarlos aqui no tenia
+# ningun efecto, sin dar tampoco ningun error.
+AIRFLOW_POOL_SINGLESTORE=default_pool
+AIRFLOW_POOL_SQLSERVER=default_pool
 
 # --- Escalado ---------------------------------------------------------------
 # Capacidad total = replicas x WORKER_CONCURRENCY
@@ -205,6 +253,19 @@ PIP_ADDITIONAL_REQUIREMENTS=
 
 # --- Especifico de Windows --------------------------------------------------
 AIRFLOW_UID=50000
+
+# ============================================================================
+# TLS CON NGINX  (opcional, docker-compose.tls.yml)
+# ----------------------------------------------------------------------------
+# Descomente el bloque entero si va a levantar el proxy TLS por delante.
+# nginx 1.27 y no una version anterior: "http2 on" necesita >= 1.25.1.
+# ============================================================================
+# NGINX_IMAGE=nginx:1.27-alpine
+# HTTP_PORT=80
+# HTTPS_PORT=443
+# DOMINIO_AIRFLOW=airflow.suempresa.local
+# DOMINIO_FLOWER=flower.suempresa.local
+# DOMINIO_SPARK=spark.suempresa.local
 "@
 
     # UTF8 sin BOM: Docker Compose no tolera el BOM al leer el .env
@@ -214,6 +275,39 @@ AIRFLOW_UID=50000
         (New-Object System.Text.UTF8Encoding $false)
     )
     Write-Host "[ok] .env generado con secretos aleatorios" -ForegroundColor Green
+}
+
+# --- 6b. Las carpetas de parquet deben existir ANTES de levantar ------------
+# Si no existen, Docker Desktop las crea al montar el bind mount, pero conviene
+# crearlas aqui: asi quedan con el propietario del usuario y no con el que
+# invente el motor, y ademas se ve en el momento si la ruta del .env apunta a
+# donde uno cree.
+foreach ($d in @("data\parquet", "data\s2sql", "data\bt2sql")) {
+    if (-not (Test-Path $d)) {
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        Write-Host "[ok] carpeta creada: $d"
+    }
+}
+
+# --- 6c. Comprobar que las imagenes propias existen -------------------------
+# Esta comprobacion existe porque el fallo contrario es silencioso y caro: el
+# .env nombra airflow-bsg y spark-bsg, y si no estan construidas el compose
+# falla con "image not found" sin decir que hay que construirlas.
+$faltan = @()
+foreach ($img in @("airflow-bsg:2.11.2", "spark-bsg:3.5.3")) {
+    docker image inspect $img 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { $faltan += $img }
+}
+if ($faltan.Count -gt 0) {
+    Write-Host "[aviso] Faltan imagenes que el .env ya referencia: $($faltan -join ', ')" -ForegroundColor Yellow
+    Write-Host "  Construyalas antes de levantar el stack:" -ForegroundColor Yellow
+    Write-Host "    docker build -t airflow-bsg:2.11.2 ."
+    Write-Host "    docker build -t spark-bsg:3.5.3 -f spark/Dockerfile ."
+    Write-Host ""
+    Write-Host "  La de Spark es la que mas se olvida, y su ausencia no se nota" -ForegroundColor DarkGray
+    Write-Host "  al arrancar sino dentro de un job, como 'No suitable driver'." -ForegroundColor DarkGray
+} else {
+    Write-Host "[ok] las dos imagenes propias estan construidas" -ForegroundColor Green
 }
 
 # --- 7. Resumen -------------------------------------------------------------

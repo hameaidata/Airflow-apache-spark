@@ -243,7 +243,12 @@ with DAG(
     max_active_runs=1,
     default_args=default_args,
     doc_md=__doc__,
-    tags=["etl", "parquet", "singlestore", "spark", "produccion"],
+    # Dos tareas de 4 horas de tope cada una, mas una de 5 minutos. Con
+    # max_active_runs=1 una corrida atascada bloquea todas las siguientes,
+    # y execution_timeout no cuenta el tiempo en queued esperando un slot
+    # del cluster de Spark ni el de up_for_retry.
+    dagrun_timeout=timedelta(hours=10),
+    tags=["manual", "etl", "parquet", "singlestore", "spark", "produccion"],
 ) as dag:
 
     preparar_config = PythonOperator(

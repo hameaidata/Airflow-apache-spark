@@ -23,7 +23,7 @@ hoy con SingleStore.
 
 | Archivo | Qué hace |
 |---|---|
-| `airflow/dags/production/dag_bt2sql_stg.py` | El DAG. Cuatro tareas, nada de lógica. |
+| `airflow/dags/production/dag_stg_bt2sql_carga.py` | El DAG. Cuatro tareas, nada de lógica. |
 | `airflow/dags/production/etl_bt2sql/bt2sql_comun.py` | Conexiones, JVM, rutas, validaciones. |
 | `airflow/dags/production/etl_bt2sql/bt2sql_extraccion.py` | Core → parquet. |
 | `airflow/dags/production/etl_bt2sql/bt2sql_carga.py` | Parquet → STG. |
@@ -118,7 +118,7 @@ BT2SQL_PARQUET_CONTAINER_DIR=/data/bt2sql
 
 ### 6. Primera corrida
 
-Lanzar `BT2SQL_STG` a mano, con `tipo_ejecucion = diario`.
+Lanzar `STG_BT2SQL_CARGA` a mano, con `tipo_ejecucion = diario`.
 
 ## La fecha de proceso sale del core, no de SQL Server
 

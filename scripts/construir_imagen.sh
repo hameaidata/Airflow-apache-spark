@@ -37,6 +37,7 @@ info()  { echo -e "${CYAN}[..]${NC} $1"; }
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 TAG="airflow-bsg:2.11.2"
+TAG_SPARK="spark-bsg:3.5.3"
 INSTALAR_ODBC="true"
 FORZAR="no"
 
@@ -155,6 +156,33 @@ docker build \
     "${RAIZ}"
 
 CODIGO=$?
+
+# ============================================================================
+# SEGUNDA IMAGEN: spark-bsg
+# ----------------------------------------------------------------------------
+# No es opcional y no es la de Apache. La oficial NO trae interprete de Python
+# -cualquier UDF muere en el executor con "Cannot run program python3"- y no
+# trae los drivers JDBC en $SPARK_HOME/jars, que es la unica ruta que entra en
+# el classpath del driver Y de los executors.
+#
+# Se construye aqui, junto a la otra, porque construir una sola y descubrirlo
+# despues es como se llega a un servidor aislado sin poder levantar Spark.
+# ============================================================================
+if [ ${CODIGO} -eq 0 ]; then
+    echo
+    echo -e "${CYAN}=== Construyendo ${TAG_SPARK} ===${NC}"
+    if [ ! -f "${RAIZ}/spark/Dockerfile" ]; then
+        fallo "No encuentro ${RAIZ}/spark/Dockerfile"
+        exit 1
+    fi
+    docker build -t "${TAG_SPARK}" -f "${RAIZ}/spark/Dockerfile" "${RAIZ}"
+    if [ $? -ne 0 ]; then
+        fallo "Fallo la construccion de ${TAG_SPARK}"
+        echo "  El stack NO puede levantar Spark sin esta imagen."
+        exit 1
+    fi
+    ok "${TAG_SPARK} construida"
+fi
 DURACION=$(( $(date +%s) - INICIO ))
 
 echo

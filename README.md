@@ -131,7 +131,7 @@ ssh -L 5432:127.0.0.1:5432 usuario@servidor
 | 88 / 464 | Kerberos | Tickets, si se usa autenticación integrada |
 | 25 / 587 | Correo interno | Alertas cuando algo falla |
 
-Detalle completo en `README-TI.md` (sección 6).
+Detalle completo en `docs/README-TI.md` (sección 6).
 
 ---
 
@@ -276,16 +276,16 @@ Los DAGs se recargan solos. El `.env`, el compose y los plugins requieren
 ### Para pedir infraestructura
 | Archivo | Contenido |
 |---|---|
-| `README-TI.md` | Solicitud de servidores. Volumen 10–100 GB/día, RHEL con Podman |
-| `README-TI-REDUCIDO.md` | La misma solicitud con volumen de 10 GB y Linux con Docker |
-| `README-REQUERIMIENTOS-FUNCIONAMIENTO.md` | Qué hace falta al cortar Internet |
+| `docs/README-TI.md` | Solicitud de servidores. Volumen 10–100 GB/día, RHEL con Podman |
+| `docs/README-TI-REDUCIDO.md` | La misma solicitud con volumen de 10 GB y Linux con Docker |
+| `docs/README-REQUERIMIENTOS-FUNCIONAMIENTO.md` | Qué hace falta al cortar Internet |
 
 ### Para trabajar
 | Archivo | Contenido |
 |---|---|
 | `docs/GUIA_CONEXIONES_DAGS.md` | Credenciales, SQL Server, DB2, procedimientos almacenados, Parquet |
-| `airflow/dags/examples/` | Cinco DAGs de ejemplo comentados |
-| `README_DOCKER.md` | Diferencias entre las versiones de Windows y Linux |
+| `airflow/dags/examples/` | DAGs de ejemplo comentados — material de lectura; `.airflowignore` impide que el scheduler los registre |
+| `docs/README_DOCKER.md` | Diferencias entre las versiones de Windows y Linux |
 
 ### Para operar
 | Archivo | Contenido |
@@ -299,16 +299,31 @@ Los DAGs se recargan solos. El `.env`, el compose y los plugins requieren
 |---|---|
 | `docs/CREDENCIALES_Y_HASHING.md` | Por qué las contraseñas de conexión no se hashean, y qué ofrecer en su lugar |
 
-> `INICIO_RAPIDO.md` y `README_MODULES.md` quedaron de una versión anterior y
-> **describen un montaje que ya no existe** (mencionan un `.env.example` que se
-> eliminó). Conviene borrarlos para que nadie los siga.
+**El índice completo está en [`docs/README.md`](docs/README.md)**: veintisiete
+documentos ordenados por el momento en que los va a necesitar. La tabla de
+arriba es sólo el atajo a los cinco o seis más usados.
+
+> `INICIO_RAPIDO.md` y `README_MODULES.md` describían un montaje que ya no
+> existe. Se movieron a `_archivo/` el 2026-09-30.
 
 ---
 
 ## Estado y pendientes
 
 **Funciona:** el stack levanta, los DAGs se descubren solos, los workers escalan
-sin downtime, los secretos están fuera de git.
+sin downtime.
+
+**Ojo con los secretos:** `.env` **sigue rastreado por git**. En `.gitignore` la
+línea que lo excluía estaba comentada. Está corregida, pero ignorar un archivo
+no lo saca del índice:
+
+```
+git rm --cached .env
+```
+
+Y eso tampoco lo borra del historial ya empujado: las claves que estuvieron ahí
+hay que rotarlas. Lo mismo vale para las contraseñas en texto plano de
+`airflow/dags/production/test_*.py`.
 
 **Sin verificar:** la construcción de la imagen propia, y la conexión real a
 SQL Server y DB2.
@@ -328,4 +343,5 @@ SQL Server y DB2.
 3. Programar la limpieza del Parquet — hoy nada lo borra
 4. `airflow db clean` periódico, con archivado previo
 5. Reconstruir los módulos de `airflow/plugins/` (están vacíos)
-6. Borrar `INICIO_RAPIDO.md` y `README_MODULES.md`
+6. Sacar `test_bt_dev.py`, `test_bt_preproduccion.py` y `test_sqlserver.py` de
+   `airflow/dags/` y rotar sus contraseñas

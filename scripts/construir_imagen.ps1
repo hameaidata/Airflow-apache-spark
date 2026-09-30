@@ -22,6 +22,7 @@ param(
     [switch]$SinOdbc,
     [switch]$Forzar,
     [string]$Tag = 'airflow-bsg:2.11.2',
+    [string]$TagSpark = 'spark-bsg:3.5.3',
     [switch]$Ayuda
 )
 
@@ -129,6 +130,36 @@ Write-Host ''
 $inicio = Get-Date
 
 docker build --build-arg "INSTALAR_ODBC=$InstalarOdbc" -t $Tag $Raiz
+$codigoAirflow = $LASTEXITCODE
+
+# ============================================================================
+# SEGUNDA IMAGEN: spark-bsg
+# ----------------------------------------------------------------------------
+# No es opcional y no es la de Apache. La oficial NO trae interprete de Python
+# -cualquier UDF muere en el executor con "Cannot run program python3"- y no
+# trae los drivers JDBC en $SPARK_HOME/jars, que es la unica ruta que entra en
+# el classpath del driver Y de los executors.
+#
+# Se construye aqui, junto a la otra, porque construir una sola y descubrirlo
+# despues es como se llega a un servidor aislado sin poder levantar Spark.
+# ============================================================================
+if ($codigoAirflow -eq 0) {
+    Write-Host ''
+    Write-Host '=== Construyendo spark-bsg:3.5.3 ===' -ForegroundColor Cyan
+    $dockerfileSpark = Join-Path $Raiz 'spark\Dockerfile'
+    if (-not (Test-Path $dockerfileSpark)) {
+        Escribir-Fallo "No encuentro spark\Dockerfile"
+        exit 1
+    }
+    docker build -t $TagSpark -f $dockerfileSpark $Raiz
+    if ($LASTEXITCODE -ne 0) {
+        Escribir-Fallo "Fallo la construccion de $TagSpark"
+        Write-Host '  El stack NO puede levantar Spark sin esta imagen.'
+        exit 1
+    }
+    Escribir-Ok "$TagSpark construida"
+}
+
 
 $codigo = $LASTEXITCODE
 $duracion = (Get-Date) - $inicio

@@ -8,7 +8,7 @@ vistazo de los otros dos que ya existen:
     etl_s2sql/    SingleStore          -> parquet -> SQL Server
     etl_bt2sql/   Bantotal (IBM i)     -> parquet -> STG SQL Server   <- este
 
-    DAG        BT2SQL_STG        airflow/dags/production/dag_bt2sql_stg.py
+    DAG        STG_BT2SQL_CARGA        airflow/dags/production/dag_stg_bt2sql_carga.py
     Variables  BT2SQL_EXTRACCION y BT2SQL_CARGA
     Tablas     CTL_PARAMETROS_PARQUET, ctl_proceso_parquet, ctl_carga_stg
                en SQL Server (GNBPE_DATAHUB)

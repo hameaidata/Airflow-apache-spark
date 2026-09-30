@@ -73,7 +73,7 @@ Produce tres archivos en `tls/`:
 | `plataforma.csr` | Lo que se envía al banco |
 | `plataforma.cnf` | La configuración usada, para repetirla al renovar |
 
-Y además `spark/conf/spark-defaults.conf`, con la configuración de proxy
+Y además `spark/config/spark-defaults.conf`, con la configuración de proxy
 inverso que Spark necesita.
 
 > El script comprueba que el CSR lleva el SAN antes de darlo por bueno. Un CSR
@@ -183,7 +183,7 @@ Estas dos opciones **deben estar puestas igual en el master y en todos los
 workers**. Si faltan, la interfaz carga pero cada enlace a un worker apunta a
 un nombre interno del contenedor que el navegador no resuelve.
 
-Van en `spark/conf/spark-defaults.conf` —un archivo montado— y no en variables
+Van en `spark/config/spark-defaults.conf` —un archivo montado— y no en variables
 de entorno, porque ese archivo lo leen siempre el master y los workers,
 mientras que el paso de opciones por entorno depende de cómo arranque cada
 demonio.

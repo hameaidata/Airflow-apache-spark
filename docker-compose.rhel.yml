@@ -74,6 +74,15 @@ x-airflow-common: &airflow-common
     # Providers extra. Vacio por defecto = arranque rapido.
     # Para produccion, construye una imagen propia (ver Dockerfile) en vez de esto.
     _PIP_ADDITIONAL_REQUIREMENTS: ${PIP_ADDITIONAL_REQUIREMENTS:-}
+    # ------------------------------------------------------------------------
+    # Pools de Airflow, leidos por os.environ en los DAGs
+    # ------------------------------------------------------------------------
+    # Sin estas dos lineas, los valores del .env NO llegan al contenedor y el
+    # codigo cae siempre a su valor por defecto. El sintoma es desconcertante:
+    # se cambia AIRFLOW_POOL_SQLSERVER en el .env, se reinicia, y no pasa nada
+    # -sin ningun error- porque dentro del contenedor esa variable no existe.
+    AIRFLOW_POOL_SINGLESTORE: ${AIRFLOW_POOL_SINGLESTORE:-default_pool}
+    AIRFLOW_POOL_SQLSERVER: ${AIRFLOW_POOL_SQLSERVER:-default_pool}
     PYTHONUNBUFFERED: "1"
   volumes:
     - ./airflow/dags:/opt/airflow/dags:z

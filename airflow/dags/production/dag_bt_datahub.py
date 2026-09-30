@@ -631,7 +631,7 @@ with DAG(
     # que una tarea pasa en queued (por ejemplo esperando un slot del pool) ni
     # en up_for_retry. dagrun_timeout es el tope duro de la corrida completa.
     dagrun_timeout=timedelta(hours=12),
-    tags=["BT", "ODS", "BDS", "datahub", "singlestore"],
+    tags=["manual", "BT", "ODS", "BDS", "datahub", "singlestore"],
     default_args=default_args,
     doc_md=DOC_MD,
 ) as dag:

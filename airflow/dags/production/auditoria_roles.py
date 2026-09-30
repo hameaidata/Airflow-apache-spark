@@ -253,7 +253,11 @@ with DAG(
     start_date=datetime(2024, 1, 1),
     catchup=False,
     max_active_runs=1,
-    tags=["seguridad", "auditoria", "cumplimiento"],
+    # Tres tareas de 15 minutos de tope cada una (viene de default_args).
+    # Una hora deja margen para reintentos sin dejar colgada la corrida
+    # semanal hasta el lunes siguiente.
+    dagrun_timeout=timedelta(hours=1),
+    tags=["continuo", "seguridad", "auditoria", "cumplimiento"],
 ) as dag:
 
     t1 = PythonOperator(

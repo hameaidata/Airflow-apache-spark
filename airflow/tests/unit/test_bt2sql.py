@@ -513,7 +513,7 @@ def test_el_dag_lleva_render_template_as_native_obj():
     """La defensa de verdad contra el bug de arriba esta en el DAG, no en el
     modulo. Este test lee el archivo porque importar el DAG requiere
     conexiones."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     assert "render_template_as_native_obj=True" in fuente
 
 
@@ -802,7 +802,7 @@ def test_el_dag_no_importa_nada_pesado_al_parsearse():
     arriba levantaria una JVM en cada pasada, y un driver que falte en un
     worker tumbaria el archivo entero con un Broken DAG en vez de fallar solo
     esa tarea con su traza."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     cabecera = fuente[:fuente.find("# CALLABLES")]
 
     for pesado in ("jaydebeapi", "jpype", "pyarrow", "import pandas"):
@@ -813,21 +813,21 @@ def test_el_dag_tiene_dagrun_timeout():
     """Con max_active_runs=1, una corrida atascada bloquea TODAS las
     siguientes. execution_timeout protege cada tarea pero no el tiempo en
     queued ni en up_for_retry."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     assert "dagrun_timeout=" in fuente
 
 
 def test_todas_las_tareas_tienen_execution_timeout():
     """Sin el, una consulta trabada contra el core deja la tarea en running
     indefinidamente y, con max_active_runs=1, el DAG entero parado."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     assert fuente.count("execution_timeout=") == fuente.count("task_id=")
 
 
 def test_la_limpieza_corre_aunque_falle_la_carga():
     """Si no, las carpetas viejas se acumulan justo los dias con problemas, que
     es cuando menos falta hace quedarse sin disco."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     assert 'trigger_rule="all_done"' in fuente
 
 
@@ -835,7 +835,7 @@ def test_el_cortocircuito_no_se_lleva_por_delante_la_limpieza():
     """Sin ignore_downstream_trigger_rules=False, el ShortCircuit salta TODO lo
     que viene despues, incluida la limpieza, que tiene all_done justamente para
     correr siempre."""
-    fuente = (DIR_PRODUCCION / "dag_bt2sql_stg.py").read_text(encoding="utf-8")
+    fuente = (DIR_PRODUCCION / "dag_stg_bt2sql_carga.py").read_text(encoding="utf-8")
     assert "ignore_downstream_trigger_rules=False" in fuente
 
 
@@ -889,7 +889,7 @@ def test_las_credenciales_no_estan_en_ningun_archivo_del_pipeline():
     """Las de Bantotal y SQL Server salen de Connections cifradas con el Fernet
     key. Un archivo versionado con la clave del core en texto plano es una
     fuga permanente: queda en el historial de git aunque se borre despues."""
-    archivos = [DIR_PRODUCCION / "dag_bt2sql_stg.py"] + \
+    archivos = [DIR_PRODUCCION / "dag_stg_bt2sql_carga.py"] + \
                list((DIR_PRODUCCION / "etl_bt2sql").glob("*.py")) + \
                [DIR_JSON / "BT2SQL_EXTRACCION.json", DIR_JSON / "BT2SQL_CARGA.json"]
 
