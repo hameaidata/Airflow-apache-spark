@@ -36,14 +36,26 @@ done
 # En Ubuntu se dejan DENTRO del proyecto, que es lo comodo para desarrollo.
 # En RHEL van a /datos, que es donde suele estar el disco de datos de verdad y
 # no la particion del sistema: estos parquet crecen todos los dias.
+# Se escriben LAS DOS versiones en el .env: la del modo actual sin comentar y
+# la otra comentada, para poder cambiar de sistema sin volver a generar nada.
 if [ "$MODO" = "rhel" ]; then
     RUTA_PARQUET="/datos/datahub/parquet"
     RUTA_S2SQL="/datos/datahub/s2sql"
     RUTA_BT2SQL="/datos/datahub/bt2sql"
+    ETIQUETA_ACTIVO="RED HAT"
+    ETIQUETA_OTRO="WINDOWS"
+    OTRA_PARQUET="C:/datahub/parquet"
+    OTRA_S2SQL="C:/datahub/s2sql"
+    OTRA_BT2SQL="C:/datahub/bt2sql"
 else
-    RUTA_PARQUET="./data/parquet"
-    RUTA_S2SQL="./data/s2sql"
-    RUTA_BT2SQL="./data/bt2sql"
+    RUTA_PARQUET="/datos/datahub/parquet"
+    RUTA_S2SQL="/datos/datahub/s2sql"
+    RUTA_BT2SQL="/datos/datahub/bt2sql"
+    ETIQUETA_ACTIVO="LINUX"
+    ETIQUETA_OTRO="WINDOWS"
+    OTRA_PARQUET="C:/datahub/parquet"
+    OTRA_S2SQL="C:/datahub/s2sql"
+    OTRA_BT2SQL="C:/datahub/bt2sql"
 fi
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -235,17 +247,36 @@ SPARK_HISTORY_PORT=18080
 # contenedor, la corrida sale verde, y los archivos desaparecen al reiniciar.
 # ============================================================================
 
-# Bantotal -> parquet -> STG en SingleStore
-PARQUET_HOST_DIR=${RUTA_PARQUET}
+
+#  LAS DOS VERSIONES ESTAN ABAJO, Y SOLO UNA PUEDE ESTAR ACTIVA.
+#
+#  ANTES de 'docker compose up', descomente el bloque del sistema donde va a
+#  levantar y COMENTE el otro. No es cosmetico: si las dos quedan sin comentar,
+#  docker compose NO avisa -se queda con la ULTIMA que lee- y usted creera que
+#  esta escribiendo en una ruta cuando escribe en la otra.
+#
+#  El lado CONTENEDOR (/data/...) es el mismo en los dos sistemas y no se toca:
+#  es la ruta que guardan las tablas de control, la que lleva output_dir en las
+#  Variables de Airflow, y la que abre despues la tarea de carga.
+#
+#  El lado HOST es el unico que cambia, y es donde se quedan los archivos de
+#  verdad: fuera del contenedor, para que el disco del contenedor no crezca y
+#  para que los parquet sobrevivan a un 'docker compose down'.
+
+# Lado contenedor: IGUAL en Windows y en Red Hat. No lo cambie.
 PARQUET_CONTAINER_DIR=/data/parquet
-
-# SingleStore -> parquet -> SQL Server
-S2SQL_PARQUET_HOST_DIR=${RUTA_S2SQL}
 S2SQL_PARQUET_CONTAINER_DIR=/data/s2sql
-
-# Bantotal -> parquet -> STG en SQL Server
-BT2SQL_PARQUET_HOST_DIR=${RUTA_BT2SQL}
 BT2SQL_PARQUET_CONTAINER_DIR=/data/bt2sql
+
+# --- ${ETIQUETA_ACTIVO} -- ACTIVO
+PARQUET_HOST_DIR=${RUTA_PARQUET}
+S2SQL_PARQUET_HOST_DIR=${RUTA_S2SQL}
+BT2SQL_PARQUET_HOST_DIR=${RUTA_BT2SQL}
+
+# --- ${ETIQUETA_OTRO} -- comentado. Descomente estas tres y comente las de arriba.
+#PARQUET_HOST_DIR=${OTRA_PARQUET}
+#S2SQL_PARQUET_HOST_DIR=${OTRA_S2SQL}
+#BT2SQL_PARQUET_HOST_DIR=${OTRA_BT2SQL}
 
 # --- Pools de Airflow -------------------------------------------------------
 # Limitan cuantas tareas golpean cada motor a la vez. Por defecto default_pool

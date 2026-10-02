@@ -231,3 +231,70 @@ levanta sin USB. Necesita TLS, o declarar el registro como inseguro en
 `/etc/docker/daemon.json` de cada demonio.
 
 Si no viaja ahora, esta opción desaparece para siempre.
+
+---
+
+## 9. Cambiar las rutas de parquet al pasar de Windows a Red Hat
+
+Esto hay que hacerlo **antes** de `docker compose up`, y no necesita red — pero
+si se olvida allá, con el servidor aislado, el síntoma es desagradable y mudo.
+
+El `.env` lleva ahora **las dos versiones**, una activa y la otra comentada:
+
+```
+# Lado contenedor: IGUAL en los dos sistemas. No se toca.
+PARQUET_CONTAINER_DIR=/data/parquet
+S2SQL_PARQUET_CONTAINER_DIR=/data/s2sql
+BT2SQL_PARQUET_CONTAINER_DIR=/data/bt2sql
+
+# --- WINDOWS -- ACTIVO
+PARQUET_HOST_DIR=C:/datahub/parquet
+S2SQL_PARQUET_HOST_DIR=C:/datahub/s2sql
+BT2SQL_PARQUET_HOST_DIR=C:/datahub/bt2sql
+
+# --- RED HAT -- comentado
+#PARQUET_HOST_DIR=/datos/datahub/parquet
+#S2SQL_PARQUET_HOST_DIR=/datos/datahub/s2sql
+#BT2SQL_PARQUET_HOST_DIR=/datos/datahub/bt2sql
+```
+
+En el servidor aislado: comente las tres de Windows, descomente las tres de Red
+Hat. Nada más.
+
+**Solo una versión puede estar activa.** Si deja las seis sin comentar, `docker
+compose` **no avisa**: se queda con la última que lee. Usted creerá que escribe
+en una ruta y escribirá en la otra, y lo descubrirá cuando busque los parquet
+donde no están.
+
+**Por qué el lado derecho no se toca.** `/data/parquet` es la ruta que las
+tablas de control guardan en `archivo_parquet`, la que llevan las Variables de
+Airflow en `output_dir`, y la que abre después la tarea de carga. Si la cambia
+sin cambiar la Variable, la extracción escribe en una carpeta que **no está
+montada**: Docker la crea dentro del contenedor, la corrida sale **verde**, y
+los archivos desaparecen al reiniciar. Es el fallo más caro de este archivo
+porque no produce ningún error.
+
+**En Windows la ruta es `C:/datahub` y no `.\data`, a propósito.** El
+repositorio vive dentro de OneDrive, y OneDrive **no lee el `.gitignore`**: unos
+parquet de prueba dentro del repositorio se empiezan a subir a la nube solos.
+En un banco eso es información de producción saliendo a un almacenamiento
+personal. `setup.ps1` crea `C:\datahub\*` y avisa si detecta OneDrive en la
+ruta del repositorio.
+
+Dos requisitos de cada lado, que no necesitan red pero sí permisos:
+
+En Windows, `C:\datahub` tiene que estar compartida con Docker Desktop
+(Settings → Resources → File sharing), o el bind mount falla al arrancar.
+
+En Red Hat, `/datos/datahub/*` tiene que existir **antes**, con el grupo
+correcto, porque Airflow corre con uid 50000 y Spark con uid 185:
+
+```bash
+sudo mkdir -p /datos/datahub/{parquet,s2sql,bt2sql}
+sudo chown -R 50000:0 /datos/datahub
+sudo chmod -R 2775 /datos/datahub
+```
+
+El `2775` es setgid: las subcarpetas por día que crea el proceso heredan el
+grupo, y así Spark puede leer lo que escribió Airflow. Sin eso, la extracción
+funciona y la carga falla con un permiso denegado que no dice por qué.

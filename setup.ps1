@@ -206,17 +206,40 @@ SPARK_HISTORY_PORT=18080
 # contenedor, la corrida sale verde, y los archivos desaparecen al reiniciar.
 # ============================================================================
 
-# Bantotal -> parquet -> STG en SingleStore
-PARQUET_HOST_DIR=./data/parquet
+
+#  LAS DOS VERSIONES ESTAN ABAJO, Y SOLO UNA PUEDE ESTAR ACTIVA.
+#
+#  ANTES de 'docker compose up', descomente el bloque del sistema donde va a
+#  levantar y COMENTE el otro. No es cosmetico: si las dos quedan sin comentar,
+#  docker compose NO avisa -se queda con la ULTIMA que lee- y usted creera que
+#  esta escribiendo en una ruta cuando escribe en la otra.
+#
+#  El lado CONTENEDOR (/data/...) es el mismo en los dos sistemas y no se toca:
+#  es la ruta que guardan las tablas de control, la que lleva output_dir en las
+#  Variables de Airflow, y la que abre despues la tarea de carga.
+#
+#  El lado HOST es el unico que cambia, y es donde se quedan los archivos de
+#  verdad: fuera del contenedor, para que el disco del contenedor no crezca y
+#  para que los parquet sobrevivan a un 'docker compose down'.
+#
+#  En Windows la ruta por defecto es C:/datahub y NO ./data, a proposito: el
+#  repositorio vive dentro de OneDrive, y OneDrive no lee el .gitignore. Unos
+#  parquet de prueba dentro de OneDrive se empiezan a subir a la nube solos.
+
+# Lado contenedor: IGUAL en Windows y en Red Hat. No lo cambie.
 PARQUET_CONTAINER_DIR=/data/parquet
-
-# SingleStore -> parquet -> SQL Server
-S2SQL_PARQUET_HOST_DIR=./data/s2sql
 S2SQL_PARQUET_CONTAINER_DIR=/data/s2sql
-
-# Bantotal -> parquet -> STG en SQL Server
-BT2SQL_PARQUET_HOST_DIR=./data/bt2sql
 BT2SQL_PARQUET_CONTAINER_DIR=/data/bt2sql
+
+# --- WINDOWS -- ACTIVO ------------------------------------------------------
+PARQUET_HOST_DIR=C:/datahub/parquet
+S2SQL_PARQUET_HOST_DIR=C:/datahub/s2sql
+BT2SQL_PARQUET_HOST_DIR=C:/datahub/bt2sql
+
+# --- RED HAT -- comentado. Descomente estas tres y comente las tres de arriba.
+#PARQUET_HOST_DIR=/datos/datahub/parquet
+#S2SQL_PARQUET_HOST_DIR=/datos/datahub/s2sql
+#BT2SQL_PARQUET_HOST_DIR=/datos/datahub/bt2sql
 
 # --- Pools de Airflow -------------------------------------------------------
 # Limitan cuantas tareas golpean cada motor a la vez. Por defecto default_pool
@@ -282,21 +305,46 @@ AIRFLOW_UID=50000
 # crearlas aqui: asi quedan con el propietario del usuario y no con el que
 # invente el motor, y ademas se ve en el momento si la ruta del .env apunta a
 # donde uno cree.
-foreach ($d in @("data\parquet", "data\s2sql", "data\bt2sql")) {
+# Las carpetas van FUERA del repositorio: C:\datahub. Si estuvieran dentro,
+# en esta maquina caerian dentro de OneDrive, que sincroniza a la nube todo lo
+# que encuentre sin mirar el .gitignore.
+foreach ($d in @("C:\datahub\parquet", "C:\datahub\s2sql", "C:\datahub\bt2sql")) {
     if (-not (Test-Path $d)) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
         Write-Host "[ok] carpeta creada: $d"
     }
 }
 
+if ($PSScriptRoot -match 'OneDrive') {
+    Write-Host ""
+    Write-Host "[aviso] Este repositorio esta dentro de OneDrive." -ForegroundColor Yellow
+    Write-Host "  Por eso los parquet se configuran en C:\datahub y no en .\data." -ForegroundColor Yellow
+    Write-Host "  Si alguna vez apunta PARQUET_HOST_DIR dentro del repositorio," -ForegroundColor Yellow
+    Write-Host "  OneDrive empezara a subir esos archivos a la nube: .gitignore" -ForegroundColor Yellow
+    Write-Host "  no lo impide, porque OneDrive no lo lee." -ForegroundColor Yellow
+}
+
 # --- 6c. Comprobar que las imagenes propias existen -------------------------
 # Esta comprobacion existe porque el fallo contrario es silencioso y caro: el
 # .env nombra airflow-bsg y spark-bsg, y si no estan construidas el compose
 # falla con "image not found" sin decir que hay que construirlas.
+# Se usa 'docker images -q' y NO 'docker image inspect'.
+#
+# inspect sobre una imagen ausente escribe por stderr y sale con codigo 1.
+# Redirigirlo con 2>&1 mete ese texto en el flujo de exito, PowerShell lo
+# convierte en NativeCommandError y, con $ErrorActionPreference = "Stop",
+# aborta el script entero. El sintoma era:
+#     docker : Error response from daemon: No such image: airflow-bsg:2.11.2
+#     ... NotSpecified: (...) [], RemoteException
+# es decir, el script moria justo en la comprobacion que existe para avisar
+# con calma de que falta construir la imagen.
+#
+# 'docker images -q' no escribe nada por stderr cuando la imagen no esta:
+# sale con codigo 0 y devuelve una cadena vacia.
 $faltan = @()
 foreach ($img in @("airflow-bsg:2.11.2", "spark-bsg:3.5.3")) {
-    docker image inspect $img 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { $faltan += $img }
+    $id = (docker images -q $img)
+    if ([string]::IsNullOrWhiteSpace($id)) { $faltan += $img }
 }
 if ($faltan.Count -gt 0) {
     Write-Host "[aviso] Faltan imagenes que el .env ya referencia: $($faltan -join ', ')" -ForegroundColor Yellow

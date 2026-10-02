@@ -5,7 +5,6 @@
 # indice: hace falta un
 #     git rm --cached .env
 # y rotar lo que ya viajo en el historial.
-.env
 .env.*
 *.bak
 *.key
