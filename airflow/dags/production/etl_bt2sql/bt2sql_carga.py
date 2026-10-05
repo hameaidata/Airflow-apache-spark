@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime,date
 from typing import Any
+import jpype
 
 from airflow.exceptions import AirflowException
 
@@ -101,6 +102,20 @@ def obtener_jobs(cur, config: dict[str, Any], batch_id: str | None,
 
     cur.execute(sql, parametros) if parametros else cur.execute(sql)
     jobs = cur.fetchall()
+    jobs_normalizados = []
+
+    for ruta, destino, batch_size, commit_every in jobs:
+        jobs_normalizados.append(
+            (
+                str(ruta) if ruta is not None else None,
+                str(destino) if destino is not None else None,
+                batch_size,
+                commit_every
+            )
+        )
+
+    jobs = jobs_normalizados
+
 
     if not jobs and not permitir_vacio:
         raise AirflowException(
@@ -152,6 +167,8 @@ def verificar_parquet(batch_id: str | None = None) -> bool:
 
     existen, faltan = [], []
     for ruta, destino, _, _ in jobs:
+        logger.info("TIPO_RUTA=%s", type(ruta))
+        logger.info("RUTA=%s", ruta)
         (existen if os.path.isfile(ruta) else faltan).append((ruta, destino))
 
     logger.info("Archivos registrados para el batch %s:", batch_id or "(ultimo)")
@@ -246,7 +263,15 @@ def volcar_parquet(conn, config: dict[str, Any], ruta: str, tabla: str,
         # filas_nativas hace dos cosas imprescindibles con JDBC: convierte los
         # tipos de numpy a nativos de Python (JPype no sabe que es un
         # numpy.int64) y pasa los NaN/NaT a None.
-        filas = filas_nativas(lote.to_pandas())
+        df = lote.to_pandas()
+        if "FECHA_PROCESO" in df.columns:
+            df["FECHA_PROCESO"] = df["FECHA_PROCESO"].apply(lambda x: (
+            jpype.java.sql.Date.valueOf(x.strftime("%Y-%m-%d"))
+            if isinstance(x, date)
+            else x
+        ))
+        filas = filas_nativas(df)
+        # filas = filas_nativas(lote.to_pandas())
         if not filas:
             continue
         cur.executemany(sql, filas)

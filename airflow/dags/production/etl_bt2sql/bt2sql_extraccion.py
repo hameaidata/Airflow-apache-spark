@@ -226,7 +226,7 @@ def _abrir_log(conn, config: dict[str, Any], fila: dict, batch_id: str,
         f"OUTPUT INSERTED.id_log "
         f"VALUES (?, ?, ?, ?, ?, SYSDATETIME(), ?, ?)",
         ("EXTRACCION_BANTOTAL", str(fila["ESQUEMA"]), str(fila["TABLA"]),
-         batch_id, fecha_proceso, ESTADO_EJECUTANDO, host()),
+         batch_id, fecha_proceso.strftime("%Y-%m-%d"), ESTADO_EJECUTANDO, host()),
     )
     id_log = int(cur.fetchone()[0])
     conn.commit()
@@ -360,7 +360,13 @@ def aplicar_tipos(bloque, mapa: dict[str, dict], tabla: str):
         tipo = cfg["type"]
 
         if tipo == "string":
-            bloque[col] = bloque[col].where(pd.notna(bloque[col]), None)
+
+            def _a_string(v):
+                if pd.isna(v):
+                    return None
+                return str(v)
+
+            bloque[col] = bloque[col].apply(_a_string)
 
         elif tipo in ("int", "bigint", "float"):
             vacias = int((bloque[col] == "").sum()) if bloque[col].dtype == object else 0
@@ -501,6 +507,7 @@ def extraer_tabla(fila: dict[str, Any], config: dict[str, Any], batch_id: str,
             # de pasar a Arrow: las cadenas vacias del core tienen que ser NULL
             # aqui, no en la carga.
             bloque = aplicar_tipos(bloque, mapa_tipos, tabla)
+
 
             bloque.insert(0, "FECHA_PROCESO", fecha_proceso)
             bloque["BATCH_ID"] = batch_id
