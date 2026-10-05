@@ -258,6 +258,176 @@ def _cerrar_log(conn, config: dict[str, Any], id_log: int, estado: str, **campos
         logger.error("No se pudo cerrar la fila %s de la bitacora: %s", id_log, exc)
 
 
+
+# ============================================================================
+# TIPOS DECLARADOS EN EL CATALOGO  (columna TIPOS de CTL_PARAMETROS_PARQUET)
+# ----------------------------------------------------------------------------
+# POR QUE EXISTE ESTO
+#
+# El DB2 del core devuelve DECIMAL sin escala y campos de texto con espacios o
+# cadenas vacias donde deberia haber NULL. pandas infiere el tipo bloque a
+# bloque, asi que la MISMA columna puede salir int64 en el primer chunk y
+# float64 en el siguiente por un solo nulo. Peor: si en los primeros
+# chunk_size registros una columna viene entera a NULL, pyarrow la infiere de
+# tipo 'null', y el bloque siguiente -con valores de verdad- ya no castea
+# contra ese esquema. El ParquetWriter aborta a media escritura y deja un
+# archivo sin footer.
+#
+# La columna TIPOS del catalogo esta justo para eso, y hasta ahora era codigo
+# muerto: se leia del catalogo, se guardaba en el diccionario de la fila y no
+# la usaba nadie.
+#
+# Formato:   COLUMNA:TIPO|COLUMNA:TIPO|...
+# Ejemplo:   PGCOD:DECIMAL(3,0)|FSH005TCV:DECIMAL(17,8)|NOMBRE:VARCHAR(50)
+# ============================================================================
+def parsear_tipos(tipos_str: str | None, tabla: str = "") -> dict[str, dict]:
+    """Convierte la cadena TIPOS en un mapa {columna: {type, precision, scale}}.
+
+    Falla con un mensaje que nombra la tabla y el fragmento malo. Un catalogo
+    mal escrito tiene que detenerse aqui, no producir un parquet con tipos
+    distintos a los declarados.
+    """
+    import re
+
+    mapa: dict[str, dict] = {}
+    if not tipos_str or not str(tipos_str).strip():
+        return mapa
+
+    for item in str(tipos_str).split("|"):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise AirflowException(
+                f"[{tabla}] TIPOS mal formado en CTL_PARAMETROS_PARQUET: {item!r}. "
+                f"El formato es COLUMNA:TIPO separado por |, "
+                f"por ejemplo  PGCOD:DECIMAL(3,0)|NOMBRE:VARCHAR(50)"
+            )
+        # split con limite 1: un tipo podria llevar dos puntos en el futuro y
+        # la version anterior reventaba con un ValueError sin contexto.
+        col, tipo = item.split(":", 1)
+        col, tipo = col.strip(), tipo.strip().lower()
+
+        if tipo.startswith(("char", "varchar", "nchar", "nvarchar")):
+            mapa[col] = {"type": "string"}
+        elif tipo.startswith(("decimal", "numeric")):
+            m = re.search(r"\((\d+)\s*,\s*(\d+)\)", tipo)
+            if not m:
+                raise AirflowException(
+                    f"[{tabla}] DECIMAL sin precision en TIPOS: {item!r}. "
+                    f"Escriba DECIMAL(p,s), por ejemplo DECIMAL(17,8). "
+                    f"Sin precision no se puede fijar el tipo del parquet."
+                )
+            mapa[col] = {"type": "decimal",
+                         "precision": int(m.group(1)), "scale": int(m.group(2))}
+        elif tipo in ("int", "integer", "smallint"):
+            mapa[col] = {"type": "int"}
+        elif tipo == "bigint":
+            mapa[col] = {"type": "bigint"}
+        elif tipo in ("float", "double", "real"):
+            mapa[col] = {"type": "float"}
+        else:
+            # Lo desconocido va a texto: es la unica conversion que nunca
+            # pierde informacion.
+            logger.warning("[%s] TIPOS: tipo no reconocido %r en %r, se trata como texto.",
+                           tabla, tipo, col)
+            mapa[col] = {"type": "string"}
+    return mapa
+
+
+def aplicar_tipos(bloque, mapa: dict[str, dict], tabla: str):
+    """Normaliza el bloque segun los tipos declarados, ANTES de pasarlo a Arrow.
+
+    Lo que de verdad arregla aqui es la cadena vacia: el core devuelve '' en
+    campos numericos sin valor, y '' no es NULL ni es cero. Sin esta pasada,
+    pyarrow infiere texto para toda la columna y el parquet acaba con numeros
+    guardados como cadenas.
+
+    A diferencia de la version del pipeline antiguo, aqui BIGINT si se
+    convierte: alla se declaraba en el mapa y luego la cadena de elif no lo
+    contemplaba, asi que una columna BIGINT se quedaba sin tocar.
+    """
+    import pandas as pd
+    from decimal import Decimal, InvalidOperation
+
+    for col, cfg in mapa.items():
+        if col not in bloque.columns:
+            logger.warning(
+                "[%s] TIPOS declara la columna %r, que no viene en el SELECT. "
+                "Revise COLUMNAS y TIPOS en el catalogo: se ignora.", tabla, col)
+            continue
+
+        tipo = cfg["type"]
+
+        if tipo == "string":
+            bloque[col] = bloque[col].where(pd.notna(bloque[col]), None)
+
+        elif tipo in ("int", "bigint", "float"):
+            vacias = int((bloque[col] == "").sum()) if bloque[col].dtype == object else 0
+            if vacias:
+                bloque[col] = bloque[col].replace("", None)
+            bloque[col] = pd.to_numeric(bloque[col], errors="coerce")
+            if vacias:
+                logger.info("[%s] %s: %s cadena(s) vacia(s) -> NULL", tabla, col, vacias)
+
+        elif tipo == "decimal":
+            vacias = int((bloque[col] == "").sum()) if bloque[col].dtype == object else 0
+            if vacias:
+                bloque[col] = bloque[col].replace("", None)
+
+            def _a_decimal(v):
+                if pd.isna(v):
+                    return None
+                try:
+                    return Decimal(str(v))
+                except (InvalidOperation, ValueError) as exc:
+                    raise AirflowException(
+                        f"[{tabla}] {col}: no se pudo convertir {v!r} a DECIMAL "
+                        f"({exc}). Revise TIPOS en el catalogo o el dato de origen."
+                    ) from exc
+
+            bloque[col] = bloque[col].apply(_a_decimal)
+            if vacias:
+                logger.info("[%s] %s: %s cadena(s) vacia(s) -> NULL", tabla, col, vacias)
+
+    return bloque
+
+
+def esquema_fijo(tabla_arrow, mapa: dict[str, dict]):
+    """Esquema de Arrow con los tipos DECLARADOS, no los inferidos.
+
+    Esta es la pieza que evita el fallo al escribir el parquet. La version del
+    pipeline antiguo solo sustituia el campo cuando el tipo era DECIMAL; para
+    todo lo demas dejaba lo que pyarrow hubiera inferido del primer bloque, que
+    es justo donde esta el problema: una columna entera a NULL en los primeros
+    chunk_size registros se infiere como 'null' y el bloque siguiente ya no
+    puede castearse contra ella.
+
+    Aqui se fija el tipo de TODA columna declarada.
+    """
+    import pyarrow as pa
+
+    equivalencias = {
+        "int":    pa.int32(),
+        "bigint": pa.int64(),
+        "float":  pa.float64(),
+        "string": pa.string(),
+    }
+
+    campos = []
+    for campo in tabla_arrow.schema:
+        cfg = mapa.get(campo.name)
+        if cfg is None:
+            campos.append(campo)
+            continue
+        if cfg["type"] == "decimal":
+            tipo = pa.decimal128(cfg["precision"], cfg["scale"])
+        else:
+            tipo = equivalencias[cfg["type"]]
+        campos.append(pa.field(campo.name, tipo, nullable=True))
+    return pa.schema(campos)
+
+
 # ============================================================================
 # EXTRACCION DE UNA TABLA
 # ============================================================================
@@ -299,6 +469,13 @@ def extraer_tabla(fila: dict[str, Any], config: dict[str, Any], batch_id: str,
         chunk = int(config["chunk_size"])
         esquema_arrow: pa.Schema | None = None
 
+        # Tipos declarados en el catalogo. Si la columna TIPOS viene vacia el
+        # mapa queda vacio y todo se comporta como antes: pyarrow infiere.
+        mapa_tipos = parsear_tipos(fila.get("TIPOS"), tabla)
+        if mapa_tipos:
+            logger.info("[%s] TIPOS declarados para %s columna(s): %s",
+                        tabla, len(mapa_tipos), ", ".join(sorted(mapa_tipos)))
+
         for bloque in pd.read_sql(sql, conn_bt, chunksize=chunk):
             if bloque.empty:
                 continue
@@ -320,6 +497,11 @@ def extraer_tabla(fila: dict[str, Any], config: dict[str, Any], batch_id: str,
             # escribe en trozos: no hay un momento en el que el DataFrame
             # completo este en memoria, que es justo lo que se evita con
             # chunksize en una tabla de millones de filas.
+            # Normalizar ANTES de inyectar las dos columnas propias y antes
+            # de pasar a Arrow: las cadenas vacias del core tienen que ser NULL
+            # aqui, no en la carga.
+            bloque = aplicar_tipos(bloque, mapa_tipos, tabla)
+
             bloque.insert(0, "FECHA_PROCESO", fecha_proceso)
             bloque["BATCH_ID"] = batch_id
 
@@ -330,7 +512,12 @@ def extraer_tabla(fila: dict[str, Any], config: dict[str, Any], batch_id: str,
                 # ParquetWriter aborta a mitad del archivo, dejando un parquet
                 # corrupto.
                 tabla_arrow = pa.Table.from_pandas(bloque, preserve_index=False)
-                esquema_arrow = tabla_arrow.schema
+                # El esquema lo mandan los TIPOS del catalogo, no la inferencia
+                # del primer bloque. Las columnas sin declarar conservan lo
+                # inferido.
+                esquema_arrow = esquema_fijo(tabla_arrow, mapa_tipos)
+                if not tabla_arrow.schema.equals(esquema_arrow):
+                    tabla_arrow = tabla_arrow.cast(esquema_arrow)
                 escritor = pq.ParquetWriter(ruta, esquema_arrow, compression="snappy")
             else:
                 tabla_arrow = pa.Table.from_pandas(

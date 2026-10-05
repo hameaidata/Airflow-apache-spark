@@ -255,17 +255,55 @@ BEGIN
         FROM CALENDARIO cal
         JOIN ORIGEN o ON o.FECHA_PROCESO = cal.FECHA_ORIGEN
     )
-    -- Una sola fila por (operacion, rubro, dia).
+    -- Una sola fila por (operacion, rubro, dia), SUMANDO los importes.
     --
-    -- El original particionaba por 23 columnas -incluidos los importes-, lo que
-    -- NO garantiza unicidad por dia: dos filas del mismo dia con importes
-    -- distintos sobrevivian las dos, y el duplicado se arrastraba hasta el
-    -- final. Aqui la particion es la clave de negocio de verdad.
+    -- POR QUE SE SUMA Y NO SE DESCARTA
     --
-    -- El desempate es explicito y total: gana la carga mas reciente, y si
-    -- empatan, el saldo mayor, y si tambien empata, el BATCH_ID. Sin esa
-    -- ultima columna el resultado seguiria dependiendo del orden de lectura.
-    SELECT * FROM (
+    -- El original particionaba por 23 columnas -importes incluidos-, lo que NO
+    -- garantiza unicidad por dia: dos filas del mismo dia con importes
+    -- distintos sobrevivian las dos y el duplicado llegaba hasta el final.
+    --
+    -- La version anterior de esta reescritura lo arreglaba con ROW_NUMBER()=1,
+    -- y eso era peor: cuando el mismo (operacion, rubro, dia) traia dos filas
+    -- que solo se diferenciaban en los montos, se quedaba con una y TIRABA LA
+    -- OTRA. Eso es dinero que desaparece del promedio sin dejar rastro.
+    --
+    -- La regla correcta es: si dos filas difieren solo en los importes, son el
+    -- mismo hecho partido en dos y sus importes se SUMAN. Por eso el GROUP BY
+    -- va sobre la clave de negocio y los montos pasan por SUM().
+    --
+    -- Los ATRIBUTOS se toman de una fila elegida con un desempate explicito
+    -- -la carga mas reciente, luego el saldo mayor, luego el BATCH_ID- en vez
+    -- de con MAX() columna a columna, que podria mezclar atributos de filas
+    -- distintas. Asi no se pierde ningun importe Y el resultado es reproducible.
+    SELECT
+        ID_OPERACION_CIERRE, COD_RUBRO, FECHA_PROCESO,
+        MAX(CASE WHEN RN = 1 THEN COD_EMPRESA          END) AS COD_EMPRESA,
+        MAX(CASE WHEN RN = 1 THEN COD_SUCURSAL         END) AS COD_SUCURSAL,
+        MAX(CASE WHEN RN = 1 THEN COD_MONEDA           END) AS COD_MONEDA,
+        MAX(CASE WHEN RN = 1 THEN COD_PAPEL            END) AS COD_PAPEL,
+        MAX(CASE WHEN RN = 1 THEN NUM_CUENTA_BT        END) AS NUM_CUENTA_BT,
+        MAX(CASE WHEN RN = 1 THEN COD_OPERACION        END) AS COD_OPERACION,
+        MAX(CASE WHEN RN = 1 THEN COD_SUB_OPERACION    END) AS COD_SUB_OPERACION,
+        MAX(CASE WHEN RN = 1 THEN COD_TIPO_OPERACION   END) AS COD_TIPO_OPERACION,
+        MAX(CASE WHEN RN = 1 THEN COD_MODULO           END) AS COD_MODULO,
+        MAX(CASE WHEN RN = 1 THEN FEC_VENCIMIENTO      END) AS FEC_VENCIMIENTO,
+        MAX(CASE WHEN RN = 1 THEN FEC_VALOR            END) AS FEC_VALOR,
+        MAX(CASE WHEN RN = 1 THEN IND_CATEGORIA_RIESGO END) AS IND_CATEGORIA_RIESGO,
+        MAX(CASE WHEN RN = 1 THEN COD_ACTI_BCO_CENTRAL END) AS COD_ACTI_BCO_CENTRAL,
+        MAX(CASE WHEN RN = 1 THEN COD_PRODUCTO         END) AS COD_PRODUCTO,
+        SUM(COALESCE(MTO_SALDO_ORIGEN, 0))  AS MTO_SALDO_ORIGEN,
+        SUM(COALESCE(MTO_SALDO_MN,     0))  AS MTO_SALDO_MN,
+        SUM(COALESCE(MTO_SALDO_ME,     0))  AS MTO_SALDO_ME,
+        SUM(COALESCE(MTO_SALDO_MO,     0))  AS MTO_SALDO_MO,
+        SUM(COALESCE(MTO_INTERES,      0))  AS MTO_INTERES,
+        SUM(COALESCE(MTO_PREVISIONES,  0))  AS MTO_PREVISIONES,
+        MAX(CASE WHEN RN = 1 THEN IND_DIA_HABIL        END) AS IND_DIA_HABIL,
+        MAX(CASE WHEN RN = 1 THEN TIPO_ORIGEN          END) AS TIPO_ORIGEN,
+        MAX(CASE WHEN RN = 1 THEN FUENTE               END) AS FUENTE,
+        MAX(CASE WHEN RN = 1 THEN FECHA_CARGA          END) AS FECHA_CARGA,
+        MAX(CASE WHEN RN = 1 THEN BATCH_ID             END) AS BATCH_ID
+    FROM (
         SELECT p.*,
                ROW_NUMBER() OVER (
                    PARTITION BY p.ID_OPERACION_CIERRE, p.COD_RUBRO, p.FECHA_PROCESO
@@ -275,7 +313,7 @@ BEGIN
                ) AS RN
         FROM PROPAGADO p
     ) x
-    WHERE RN = 1;
+    GROUP BY ID_OPERACION_CIERRE, COD_RUBRO, FECHA_PROCESO;
 
     -- ========================================================================
     -- 4. RELLENO DE HUECOS
@@ -340,9 +378,15 @@ BEGIN
             k.PRIMERA_FECHA,
             k.ULTIMA_FECHA
         FROM LLAVES k
-        JOIN BDS_CALENDARIOS c
-          ON c.COD_CALENDARIO = 1
-         AND YEAR(c.FEC_CALENDARIO)  = k.ANIO
+        -- DISTINCT y no la tabla directa: si BDS_CALENDARIOS trae una fila
+        -- repetida para un dia -tipico de los feriados, que se cargan aparte-
+        -- este join la duplicaria, y con ella TODA fila de relleno de ese dia.
+        -- Las filas que ya existen no se duplican porque pasan por el GROUP BY
+        -- de TMP_SO_DIARIO; las de relleno no tenian esa proteccion.
+        JOIN (SELECT DISTINCT FEC_CALENDARIO, IND_DIA_HABIL
+                FROM BDS_CALENDARIOS
+               WHERE COD_CALENDARIO = 1) c
+          ON YEAR(c.FEC_CALENDARIO)  = k.ANIO
          AND MONTH(c.FEC_CALENDARIO) = k.MES
          AND c.FEC_CALENDARIO <= V_FECHA_FIN
     ),
@@ -351,14 +395,31 @@ BEGIN
             e.*,
             d.ID_OPERACION_CIERRE AS EXISTE,
             -- Ultima fecha CON DATOS hasta este dia, mirando hacia atras.
+            --
+            -- SIN filtrar por TIPO_ORIGEN, a proposito. Una copia heredada del
+            -- ultimo dia habil del mes ANTERIOR -el sabado 31 que se copia al
+            -- domingo 1- es presencia real de la operacion en este mes, y tiene
+            -- que anclar igual que un dato propio. Con el filtro puesto, una
+            -- operacion cuya unica fila del mes es esa copia se quedaba con UN
+            -- dia de treinta: las dos anclas salian NULL y el WHERE de abajo
+            -- descartaba los otros 29.
+            --
+            -- Da igual que la copia traiga importes en cero: lo que importa es
+            -- que la operacion existe ese mes. Los dias generados van a cero de
+            -- todas formas.
             MAX(CASE WHEN d.ID_OPERACION_CIERRE IS NOT NULL
-                      AND d.TIPO_ORIGEN = 'ORIGINAL'
                      THEN e.FECHA_PROCESO END)
                 OVER (PARTITION BY e.ID_OPERACION_CIERRE, e.COD_RUBRO, e.ANIO, e.MES
                       ORDER BY e.FECHA_PROCESO
                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS ANCLA_PREV,
             -- Primera fecha CON DATOS desde este dia, mirando hacia adelante.
             -- Solo se usa cuando no hay nada detras.
+            --
+            -- Esta SI exige ORIGINAL, y la asimetria es deliberada: reproduce
+            -- el TEMP_AUXILIAR_INICIO_MES del script original, que pedia
+            -- TIPO_ORIGEN <> 'COPIA_HABIL' en la primera fila del mes.
+            -- Hacia atras se hereda de lo que haya; hacia adelante, solo de un
+            -- dato propio.
             MIN(CASE WHEN d.ID_OPERACION_CIERRE IS NOT NULL
                       AND d.TIPO_ORIGEN = 'ORIGINAL'
                      THEN e.FECHA_PROCESO END)
