@@ -1,0 +1,84 @@
+{
+  "_descripcion": "Variable del gemelo Spark de STG_BT2SQL_CARGA. Las claves son las mismas que BT2SQL_EXTRACCION y BT2SQL_CARGA, en dos secciones, para que los dos pipelines se puedan comparar clave a clave. Lo que cambia: output_dir (carpeta propia, para no pisar al de pandas), nom_proceso (para distinguirlos en la bitacora), sufijo_staging, y la seccion 'particiones'.",
+  "_sincronizar": "python scripts/sync_variables.py --solo BT2SQL_SPARK",
+  "_particiones": "DONDE SPARK GANA O NO GANA. Una tabla sin entrada aqui se lee con UNA sola conexion y Spark no aporta paralelismo: hace el mismo trabajo que pandas con la latencia de un cluster. El job lo avisa en el log. 'columna' debe ser NUMERICA y estar razonablemente repartida; si todas las filas caen en un rango, una particion hace todo el trabajo y las demas quedan vacias.",
+  "extraccion": {
+    "output_dir": "/data/bt2sql/spark",
+    "retencion_dias": 7,
+    "sql_fecha": "SELECT PGFCIE FROM GPPPBTDB.FST017 FETCH FIRST 1 ROW ONLY",
+    "tb_proceso_parquet": "ctl_proceso_parquet",
+    "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
+    "error_size_limit": 4000,
+    "conn_id_origen": "CONEXION_BANTOTAL",
+    "conn_id_destino": "CONEXION_SQLSERVER",
+    "procesos": [
+      {
+        "nombre_proceso": "STG_FSH005",
+        "nombre_esquema": "GPPPBTDB",
+        "estado": 1,
+        "prioridad": 1,
+        "estado_diario": 1,
+        "estado_semanal": 0,
+        "estado_mensual": 0
+      },
+      {
+        "nombre_proceso": "STG_MSFD008",
+        "nombre_esquema": "GPPPBTDB",
+        "estado": 1,
+        "prioridad": 1,
+        "estado_diario": 1,
+        "estado_semanal": 0,
+        "estado_mensual": 0
+      },
+      {
+        "nombre_proceso": "STG_FSH031",
+        "nombre_esquema": "GPPPBTDB",
+        "estado": 1,
+        "prioridad": 2,
+        "estado_diario": 1,
+        "estado_semanal": 0,
+        "estado_mensual": 0
+      },
+      {
+        "nombre_proceso": "STG_FSH012",
+        "nombre_esquema": "GPPPBTDB",
+        "estado": 1,
+        "prioridad": 2,
+        "estado_diario": 1,
+        "estado_semanal": 0,
+        "estado_mensual": 0
+      }
+    ],
+    "nom_proceso": "SPARK_EXTRACCION_BANTOTAL",
+    "estado_ejecutando": "EJECUTANDO",
+    "estado_terminado": "TERMINADO",
+    "estado_sin_datos": "SIN_DATOS",
+    "estado_error": "ERROR",
+    "fetchsize": 10000,
+    "archivos_por_tabla": 1,
+    "particiones": {
+      "FSH005": {
+        "columna": "PGCOD",
+        "desde": 1,
+        "hasta": 999,
+        "particiones": 8
+      }
+    }
+  },
+  "carga": {
+    "nom_proceso": "SPARK_PY_CARGA_BT2SQL_STG",
+    "tabla_control": "ctl_carga_stg",
+    "sql_jobs": "SELECT p.archivo_parquet, e.tabla_destino, e.batch_size, p.commit_every FROM ctl_proceso_parquet p INNER JOIN CTL_PARAMETROS_PARQUET e ON p.tabla_origen = e.TABLA AND e.ESQUEMA = p.esquema AND e.ACTIVO = 'S' WHERE p.estado = 'TERMINADO' AND p.batch_id = {BATCH_ID} AND p.archivo_parquet IS NOT NULL ORDER BY p.id_log, e.TABLA",
+    "estado_iniciado": "INICIADO",
+    "estado_ejecutado": "EJECUTADO",
+    "estado_finalizado": "FINALIZADO",
+    "estado_error": "ERROR",
+    "error_size_limit": 4000,
+    "commit_default": 10,
+    "batch_default": 5000,
+    "usar_staging": true,
+    "sufijo_staging": "_SPK",
+    "tabla_control_extraccion": "ctl_proceso_parquet",
+    "conn_id_destino": "CONEXION_SQLSERVER"
+  }
+}
