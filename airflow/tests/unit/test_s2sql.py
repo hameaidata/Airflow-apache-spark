@@ -555,7 +555,7 @@ def dag_s2sql(variable_config):
 
     bolsa = DagBag(str(DIR_DAGS), include_examples=False)
     assert not bolsa.import_errors, bolsa.import_errors
-    return bolsa.get_dag("S2SQL_EXPORT")
+    return bolsa.get_dag("EXP_S2SQL_CARGA")
 
 
 def test_el_dag_se_registra_con_su_topologia(dag_s2sql):

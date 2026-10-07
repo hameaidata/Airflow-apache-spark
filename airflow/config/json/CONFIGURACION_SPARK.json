@@ -1,5 +1,5 @@
 {
-  "_DESCRIPCION": "Recursos y opciones del cluster Spark. Lo consume dag_bt_parquet_singlestore_spark.py via la Variable CONFIGURACION_SPARK.",
+  "_DESCRIPCION": "Recursos y opciones del cluster Spark. Lo consumen los DAGs que envian trabajos al cluster (dag_stg_bt2sql_carga_spark.py, dag_util_orquestador_json.py) via la Variable CONFIGURACION_SPARK.",
   "_ADVERTENCIA": [
     "La version anterior de este archivo describia un cluster YARN + HDFS",
     "(spark.master=yarn, spark.eventLog.dir=hdfs:///spark-history) que NO existe:",

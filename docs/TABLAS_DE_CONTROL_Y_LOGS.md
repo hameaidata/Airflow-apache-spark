@@ -15,18 +15,18 @@ pero **no tienen DDL en ningún sitio**.
    BANTOTAL (AS/400)                  SINGLESTORE                SQL SERVER 2022
         │                              DATAHUB                   GNBPE_DATAHUB
         │
-        ├── etl_bt_parquet_singlestore ──► STG ──┐
+        ├── STG_BT_PARQUET ──► STG ──┐
         │     CTL_PARAMETROS_PARQUET             │
         │     ctl_proceso_parquet                │
         │     ctl_carga_stg                      │
         │     ETL_CONFIG                         │
         │                                        ▼
-        │                              BT_DATAHUB (ODS → BDS)
+        │                              BDS_DATAHUB_PROCESOS (ODS → BDS)
         │                                CTL_CFG_PROCESOS
         │                                CONTROL_EJECUCIONES_SP
         │                                ctl_log_proceso
         │                                        │
-        │                                        ├──► S2SQL_EXPORT ──► SQL Server
+        │                                        ├──► EXP_S2SQL_CARGA ──► SQL Server
         │                                        │      CTL.CTL_S2SQL_CATALOGO
         │                                        │      CTL.CTL_S2SQL_LOTE
         │                                        │      CTL.CTL_S2SQL_LOG_CARGA

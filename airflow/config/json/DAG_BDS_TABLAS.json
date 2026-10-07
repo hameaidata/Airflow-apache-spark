@@ -23,7 +23,10 @@
           "SCHEMA_DESTINO": "DATAHUB",
           "ACTIVO": "S",
           "PARAMETROS": [],
-          "TIMEOUT_MINUTOS": 60
+          "TIMEOUT_MINUTOS": 60,
+          "DEPENDE_DE_ODS": [
+            104
+          ]
         },
         {
           "ID_PROCESO": 2001,
@@ -86,7 +89,10 @@
           "SCHEMA_ORIGEN": "DATAHUB",
           "SCHEMA_DESTINO": "DATAHUB",
           "ACTIVO": "N",
-          "DEPENDE_DE": [2001, 2002],
+          "DEPENDE_DE": [
+            2001,
+            2002
+          ],
           "PARAMETROS": [],
           "TIMEOUT_MINUTOS": 120
         },
@@ -117,7 +123,10 @@
           "SCHEMA_ORIGEN": "DATAHUB",
           "SCHEMA_DESTINO": "DATAHUB",
           "ACTIVO": "N",
-          "DEPENDE_DE": [2101, 2102],
+          "DEPENDE_DE": [
+            2101,
+            2102
+          ],
           "PARAMETROS": [],
           "TIMEOUT_MINUTOS": 120
         },

@@ -4,7 +4,7 @@ Extrae tablas del core Bantotal por JDBC, las deja en parquet organizadas por
 día y por tabla, y las sube a las tablas STG de `GNBPE_DATAHUB` en SQL Server.
 
 Es la primera mitad del flujo. De STG a ODS y de ODS a BDS se encargan los
-stored procedures del DataHub, orquestados aparte, igual que `BT_DATAHUB` hace
+stored procedures del DataHub, orquestados aparte, igual que `BDS_DATAHUB_PROCESOS` hace
 hoy con SingleStore.
 
 ```

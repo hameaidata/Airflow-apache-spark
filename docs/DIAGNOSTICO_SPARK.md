@@ -253,3 +253,73 @@ docker logs <worker> 2>&1 | Select-String -Pattern "Failed|Retrying|Authenticati
 **El worker aparece pero los jobs se quedan en `WAITING`**
 `executor_memory` es mayor que lo que el worker anuncia. Baja el del DAG o sube
 `SPARK_WORKER_MEMORY`, dejando ~1 GB de margen.
+
+---
+
+## «Broken DAG: cannot import name X from utils.spark_config»
+
+Síntoma exacto, visto el 2026-10-07:
+
+```
+Broken DAG: [/opt/airflow/dags/production/dag_stg_bt2sql_carga_spark.py]
+ImportError: cannot import name 'driver_for_conn' from 'utils.spark_config'
+            (/opt/airflow/plugins/utils/spark_config.py)
+```
+
+Y la función **sí está** en ese archivo. Se puede abrir y verla.
+
+### Por qué pasa
+
+Airflow importa **todo lo que hay bajo `plugins/` una sola vez, al arrancar el
+proceso**, y lo deja en `sys.modules`. El scheduler es un proceso de larga vida:
+los procesos que parsean los DAGs se derivan de él y **heredan ese
+`sys.modules`**. Así que un módulo bajo `plugins/` que cambia en disco sigue
+siendo, dentro del contenedor, el objeto que se importó al arrancar.
+
+Los DAGs **no** funcionan así: el scheduler los relee cada 30 segundos. De ahí
+la confusión — se edita un DAG y el cambio aparece solo; se edita un plugin y
+parece que el archivo «no se guardó».
+
+El `.pyc` lo confirma. En el caso real, el compilado de Python 3.11 del
+contenedor registraba un tamaño de fuente de 8.097 bytes cuando el archivo en
+disco ya tenía 11.586: el contenedor compiló la versión anterior y se quedó con
+ella.
+
+### La solución
+
+Reiniciar los servicios que importan los plugins. No hace falta `down`, ni
+reconstruir la imagen, ni borrar volúmenes:
+
+```bash
+docker compose -f docker-compose.windows.yml restart \
+    airflow-scheduler airflow-webserver airflow-worker
+```
+
+Y si el `.pyc` quedó desalineado —pasa con bind mounts de Windows, más aún
+sobre OneDrive, donde la fecha que ve el contenedor puede no ser la del host—,
+borre los compilados antes de reiniciar:
+
+```powershell
+Get-ChildItem -Path airflow -Recurse -Directory -Filter __pycache__ |
+    Remove-Item -Recurse -Force
+```
+
+```bash
+find airflow spark -name __pycache__ -type d -exec rm -rf {} +
+```
+
+Están en `.gitignore`, así que borrarlos no afecta al repositorio.
+
+### La regla, para no volver a perder el tiempo aquí
+
+| Qué se editó | Qué hace falta |
+|---|---|
+| Un DAG en `dags/` | nada: se relee en ~30 s |
+| Cualquier cosa en `plugins/` | **reiniciar scheduler, webserver y worker** |
+| Un job en `spark/jobs/` | nada: `spark-submit` lo lee en cada corrida |
+| Una Variable de Airflow | nada para los DAGs; para un job de Spark, republicar el JSON de runtime (ver `CONFIG_RUNTIME_SPARK.md`) |
+| El `.env` o un `docker-compose*.yml` | `docker compose up -d` (recrea lo que cambió) |
+| Un `Dockerfile` | reconstruir la imagen |
+
+La fila de `plugins/` es la que muerde, porque el error que produce apunta al
+archivo correcto y dice que le falta algo que sí tiene.

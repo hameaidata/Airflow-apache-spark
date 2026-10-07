@@ -1,5 +1,5 @@
 """
-BT_DATAHUB - Orquesta la capa ODS y luego la capa BDS en un solo DAG.
+BDS_DATAHUB_PROCESOS - Orquesta la capa ODS y luego la capa BDS en un solo DAG.
 
 Configuracion (Variables de Airflow, versionadas en airflow/config/json/):
     DAG_ODS_TABLAS   grupos y procesos de la capa ODS
@@ -65,7 +65,7 @@ from airflow.utils.task_group import TaskGroup
 
 logger = logging.getLogger(__name__)
 
-DAG_ID = "BT_DATAHUB"
+DAG_ID = "BDS_DATAHUB_PROCESOS"
 
 VARIABLE_ODS = "DAG_ODS_TABLAS"
 VARIABLE_BDS = "DAG_BDS_TABLAS"
@@ -207,14 +207,19 @@ def grupos_con_procesos_activos(
     return sorted(grupos, key=lambda item: int(item.get("ORDEN", 0)))
 
 
-def dependencias_proceso(proceso_cfg: dict[str, Any], errores: list[str]) -> list[int]:
+CAMPOS_DEPENDE_BDS = ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS")
+CAMPOS_DEPENDE_ODS = ("DEPENDE_DE_ODS", "ODS_DEPENDE_DE", "REQUIERE_ODS")
+
+
+def _ids_de(proceso_cfg: dict[str, Any], campos: tuple[str, ...],
+            errores: list[str]) -> list[int]:
     """Acepta [], 2001, '2001,2002' o [2001, 2002].
 
     Igual que proceso_activo: un valor mal escrito se anota y se devuelve una
     lista vacia, para no cortar la validacion en el primer error.
     """
     valor = None
-    for campo in ("DEPENDE_DE", "DEPENDENCIAS", "BDS_DEPENDE_DE", "DEPENDE_DE_BDS"):
+    for campo in campos:
         if campo in proceso_cfg:
             valor = proceso_cfg[campo]
             break
@@ -236,6 +241,28 @@ def dependencias_proceso(proceso_cfg: dict[str, Any], errores: list[str]) -> lis
         f"Dependencias invalidas para ID_PROCESO={proceso_cfg.get('ID_PROCESO')}: {valor!r}"
     )
     return []
+
+
+def dependencias_proceso(proceso_cfg: dict[str, Any], errores: list[str]) -> list[int]:
+    """Dependencias DENTRO de la capa BDS, por ID_PROCESO."""
+    return _ids_de(proceso_cfg, CAMPOS_DEPENDE_BDS, errores)
+
+
+def dependencias_ods(proceso_cfg: dict[str, Any], errores: list[str]) -> list[int]:
+    """Procesos de la capa ODS que este proceso BDS necesita.
+
+    POR QUE HACE FALTA UN CAMPO APARTE
+    ----------------------------------
+    Hasta el 2026-10-07 un proceso BDS colgaba de 'ods_completo' en bloque y no
+    sabia de que tabla ODS dependia: no habia donde declararlo. La consecuencia
+    es que un fallo en CUALQUIER tabla ODS tenia el mismo efecto sobre todo BDS,
+    y al reves, un BDS podia correr sobre una tabla ODS que no se habia cargado.
+
+    No se reutiliza DEPENDE_DE porque ahi los ids son de la capa BDS, y mezclar
+    las dos numeraciones en un solo campo obliga a adivinar a que capa pertenece
+    cada numero. Hoy no colisionan por casualidad; manana si.
+    """
+    return _ids_de(proceso_cfg, CAMPOS_DEPENDE_ODS, errores)
 
 
 # ============================================================================
@@ -320,7 +347,56 @@ def ejecutar_ods(id_proceso: int, nombre_grupo: str):
     return modulo.ejecutar_proceso_desde_json(id_proceso, nombre_grupo)
 
 
-def ejecutar_bds(id_proceso: int, nombre_grupo: str):
+def ejecutar_bds(id_proceso: int, nombre_grupo: str,
+                 tareas_ods: list[str] | None = None, **context):
+    """Carga un proceso BDS, pero solo si lo que necesita de ODS salio bien.
+
+    LA DEFENSA, NO LA PUERTA
+    ------------------------
+    Quien impide de verdad que esto corra es el GRAFO: DEPENDE_DE_ODS crea una
+    arista real desde la tarea de ODS, con all_success, asi que si esa tarea
+    fallo Airflow marca esta upstream_failed y no la programa. No arranca, no
+    ocupa un slot del pool y no abre un log.
+
+    Esta comprobacion es la red de seguridad para el unico caso que se escapa
+    del grafo: que alguien haga Clear sobre esta tarea, a mano, mientras su
+    insumo de ODS sigue en rojo. Ahi Airflow si la ejecutaria, y sin esto el
+    stored procedure correria sobre una tabla ODS que no se cargo.
+
+    Y se SALTA, no se falla. Que una tabla BDS no corra porque su insumo de ODS
+    no se cargo no es un fallo de esta tabla: es la consecuencia correcta de un
+    fallo que ya esta marcado en rojo en otro sitio. Marcarla en rojo tambien
+    multiplicaria el mismo incidente por todas las tablas que cuelgan de el y
+    haria mas dificil encontrar la causa.
+    """
+    from airflow.exceptions import AirflowSkipException
+
+    requeridas = list(tareas_ods or [])
+    if requeridas:
+        corrida = context.get("dag_run")
+        if corrida is None:
+            raise AirflowException(
+                "ejecutar_bds no recibio el contexto de la corrida y no puede "
+                "comprobar sus dependencias de ODS. Es un error de "
+                "programacion del DAG, no de configuracion.")
+
+        fallidas = []
+        for task_id in requeridas:
+            ti = corrida.get_task_instance(task_id)
+            estado = getattr(ti, "state", None)
+            if str(estado) != "success":
+                fallidas.append(f"{task_id} ({estado or 'no ejecutada'})")
+
+        if fallidas:
+            logger.warning(
+                "ID_PROCESO=%s (%s) NO se ejecuta: su insumo de ODS no termino "
+                "bien -> %s", id_proceso, nombre_grupo, ", ".join(fallidas))
+            raise AirflowSkipException(
+                f"Depende de ODS que no termino en exito: {', '.join(fallidas)}")
+
+        logger.info("ID_PROCESO=%s: sus %s dependencia(s) de ODS estan en exito",
+                    id_proceso, len(requeridas))
+
     modulo = importar_modulo("table_bds.py", "_bt_datahub_table_bds_runtime")
     return modulo.ejecutar_proceso_desde_json(id_proceso, nombre_grupo)
 
@@ -345,6 +421,8 @@ class Plan:
     nodos: dict[int, Nodo] = field(default_factory=dict)
     # (origen, destino); origen puede ser un ID_PROCESO o "ods_completo".
     aristas_bds: list[tuple[Any, int]] = field(default_factory=list)
+    # ID_PROCESO de BDS -> ID_PROCESO de ODS que necesita para poder correr.
+    ods_requeridas: dict[int, list[int]] = field(default_factory=dict)
 
 
 def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Plan:
@@ -402,6 +480,12 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
                         f"{donde}: DEPENDE_DE no aplica en ODS. El orden de ODS se controla "
                         f"con ORDEN del grupo y PARALELO."
                     )
+                if capa == "ODS" and dependencias_ods(p, errores):
+                    errores.append(
+                        f"{donde}: DEPENDE_DE_ODS solo tiene sentido en BDS. Dentro de "
+                        f"ODS no hay dependencias de datos declaradas; por eso un fallo "
+                        f"en una tabla ODS no detiene a las demas."
+                    )
 
                 plan.nodos[pid] = Nodo(
                     id_proceso=pid,
@@ -441,7 +525,51 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
             pid = int(p["ID_PROCESO"])
             deps = dependencias_proceso(p, errores)
 
-            if deps:
+            # --- lo que este proceso BDS necesita de la capa ODS -----------
+            requiere_ods = []
+            for d in dependencias_ods(p, errores):
+                nodo = plan.nodos.get(d)
+                if nodo is not None and nodo.capa == "ODS":
+                    requiere_ods.append(d)
+                elif nodo is not None:
+                    errores.append(
+                        f"{VARIABLE_BDS}.{g['NOMBRE']}.ID_PROCESO={pid}: "
+                        f"DEPENDE_DE_ODS={d} apunta a un proceso de la capa "
+                        f"{nodo.capa}, no a ODS. Para depender de otro proceso "
+                        f"BDS use DEPENDE_DE."
+                    )
+                elif d in inactivos_declarados:
+                    errores.append(
+                        f"{VARIABLE_BDS}.{g['NOMBRE']}.ID_PROCESO={pid}: "
+                        f"DEPENDE_DE_ODS={d} existe pero esta ACTIVO='N'. Este "
+                        f"proceso BDS se saltaria SIEMPRE. Active {d} o quite "
+                        f"la dependencia."
+                    )
+                else:
+                    errores.append(
+                        f"{VARIABLE_BDS}.{g['NOMBRE']}.ID_PROCESO={pid}: "
+                        f"DEPENDE_DE_ODS={d} no existe en {VARIABLE_ODS}."
+                    )
+            if requiere_ods:
+                plan.ods_requeridas[pid] = requiere_ods
+                # ARISTA REAL del grafo, no una comprobacion en ejecucion.
+                #
+                # La primera version colgaba estas tareas de 'ods_completo' y
+                # comprobaba el estado de ODS dentro del callable. Funcionaba,
+                # pero la tarea ARRANCABA: ocupaba un slot del pool, abria su
+                # log y se saltaba dentro. Con la arista, Airflow la marca
+                # upstream_failed y no la programa siquiera. "Ni siquiera
+                # intentarlo" es literal.
+                #
+                # Y se puede hacer asi porque una dependencia de ODS y una
+                # dependencia de BDS son la MISMA clase de cosa -datos- y las
+                # dos quieren la misma regla, all_success. Lo que no se podia
+                # mezclar era una dependencia de datos con 'ods_completo', que
+                # es orden.
+                for o in requiere_ods:
+                    plan.aristas_bds.append((o, pid))
+
+            if deps or requiere_ods:
                 for d in deps:
                     if d in plan.nodos:
                         plan.aristas_bds.append((d, pid))
@@ -467,9 +595,14 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
             anterior_en_grupo = pid
 
     # --- ciclos ------------------------------------------------------------
+    # Las aristas que nacen en un proceso de ODS no pueden cerrar un ciclo:
+    # ODS no depende de nada y nada de ODS depende de BDS, y las dos cosas
+    # estan validadas mas arriba. Se dejan fuera para que el recorrido hable
+    # solo de dependencias entre procesos BDS, que es de lo que informa el
+    # mensaje de error.
     adyacencia: dict[int, list[int]] = defaultdict(list)
     for origen, destino in plan.aristas_bds:
-        if isinstance(origen, int):
+        if isinstance(origen, int) and plan.nodos[origen].capa == "BDS":
             adyacencia[origen].append(destino)
 
     estado: dict[int, int] = {}
@@ -551,7 +684,7 @@ def alertar_fallo(context) -> None:
 # CONSTRUCCION DEL DAG
 # ============================================================================
 # construir_plan lanza cuando la configuracion es invalida. Si esa excepcion
-# escapa del modulo, Airflow marca el archivo como Broken DAG y BT_DATAHUB
+# escapa del modulo, Airflow marca el archivo como Broken DAG y BDS_DATAHUB_PROCESOS
 # DESAPARECE de la lista: no se ve el historial, ni las tareas, ni las Docs, y
 # el motivo queda en un banner que hay que ir a buscar. Es exactamente lo que
 # cargar_config se cuida de evitar ("un DAG vacio se diagnostica; un archivo
@@ -597,12 +730,22 @@ default_args = {
 }
 
 
-def crear_tarea(nodo: Nodo, callable_proceso) -> PythonOperator:
+def task_id_completo(nodo: Nodo) -> str:
+    """El task_id tal como lo ve la corrida: '<group_id>.<task_id>'."""
+    return f"{task_id_grupo(nodo.capa, nodo.grupo)}.{task_id_proceso(nodo.cfg)}"
+
+
+def crear_tarea(nodo: Nodo, callable_proceso, trigger_rule: str = "all_success",
+                tareas_ods: list[str] | None = None) -> PythonOperator:
     cfg, grupo_cfg = nodo.cfg, nodo.grupo_cfg
+    kwargs = {"id_proceso": nodo.id_proceso, "nombre_grupo": nodo.grupo}
+    if tareas_ods:
+        kwargs["tareas_ods"] = tareas_ods
     return PythonOperator(
         task_id=task_id_proceso(cfg),
         python_callable=callable_proceso,
-        op_kwargs={"id_proceso": nodo.id_proceso, "nombre_grupo": nodo.grupo},
+        trigger_rule=trigger_rule,
+        op_kwargs=kwargs,
         retries=int(cfg.get("REINTENTOS", grupo_cfg.get("REINTENTOS", 0))),
         execution_timeout=timedelta(minutes=max(int(cfg.get("TIMEOUT_MINUTOS", 30)), 1)),
         pool=pool_de(cfg, grupo_cfg),
@@ -611,12 +754,62 @@ def crear_tarea(nodo: Nodo, callable_proceso) -> PythonOperator:
             f"Stored procedure: `{cfg.get('STORED_PROCEDURE')}`  \n"
             f"Origen: `{cfg.get('SCHEMA_ORIGEN')}.{cfg.get('TABLA_ORIGEN')}`  \n"
             f"Destino: `{cfg.get('SCHEMA_DESTINO')}.{cfg.get('TABLA_DESTINO')}`"
+            + (f"  \nRequiere de ODS: `{', '.join(tareas_ods)}`" if tareas_ods else "")
+            + (f"  \nRegla de disparo: `{trigger_rule}`"
+               if trigger_rule != "all_success" else "")
         ),
     )
 
 
 def fallar_por_configuracion() -> None:
     raise AirflowException(ERROR_CONFIG)
+
+
+def resumen_de_la_corrida(**context) -> dict:
+    """Cuenta como acabo cada tabla y falla si alguna fallo.
+
+    POR QUE ESTA TAREA EXISTE
+    -------------------------
+    Que un fallo no trunque el proceso no quiere decir que se oculte. Con
+    all_done repartido por el grafo, la ultima tarea terminaria siempre en
+    exito y Airflow marcaria la CORRIDA ENTERA en verde aunque dentro hubiera
+    tablas en rojo. Nadie mira el detalle de una corrida verde.
+
+    Asi que aqui se recorre el estado real de las tareas, se deja un resumen
+    legible en el log -que es lo que alguien quiere ver a las siete de la
+    manana- y se falla si hubo algun fallo.
+    """
+    corrida = context["dag_run"]
+    por_estado: dict[str, list[str]] = defaultdict(list)
+    for ti in corrida.get_task_instances():
+        if ti.task_id in ("inicio", "ods_completo", "bds_completo", "fin"):
+            continue
+        por_estado[str(ti.state)].append(ti.task_id)
+
+    total = sum(len(v) for v in por_estado.values())
+    logger.info("RESUMEN DE LA CORRIDA  (%s tabla(s))", total)
+    for estado in sorted(por_estado):
+        logger.info("  %-14s %s", estado, len(por_estado[estado]))
+        for task_id in sorted(por_estado[estado]):
+            logger.info("      %s", task_id)
+
+    fallidas = por_estado.get("failed", []) + por_estado.get("upstream_failed", [])
+    saltadas = por_estado.get("skipped", [])
+    if saltadas:
+        logger.warning(
+            "%s tabla(s) no se ejecutaron porque su insumo no estaba: %s",
+            len(saltadas), ", ".join(sorted(saltadas)))
+
+    resumen = {estado: len(tareas) for estado, tareas in por_estado.items()}
+    if fallidas:
+        raise AirflowException(
+            f"La corrida termino con {len(fallidas)} tabla(s) en error: "
+            f"{', '.join(sorted(fallidas))}.\n"
+            f"Las demas SI se cargaron -por eso el proceso no se trunco- y "
+            f"{len(saltadas)} se saltaron por depender de estas. "
+            f"Reintente solo las fallidas y despues sus dependientes.")
+    logger.info("Todas las tablas que entraron en la corrida terminaron bien.")
+    return resumen
 
 
 with DAG(
@@ -631,7 +824,7 @@ with DAG(
     # que una tarea pasa en queued (por ejemplo esperando un slot del pool) ni
     # en up_for_retry. dagrun_timeout es el tope duro de la corrida completa.
     dagrun_timeout=timedelta(hours=12),
-    tags=["manual", "BT", "ODS", "BDS", "datahub", "singlestore"],
+    tags=["produccion", "manual", "bds", "ods", "datahub", "bantotal", "singlestore"],
     default_args=default_args,
     doc_md=DOC_MD,
 ) as dag:
@@ -646,9 +839,26 @@ with DAG(
         )
     else:
         inicio = EmptyOperator(task_id="inicio")
-        ods_completo = EmptyOperator(task_id="ods_completo")
-        bds_completo = EmptyOperator(task_id="bds_completo")
-        fin = EmptyOperator(task_id="fin")
+        # all_done en los tres: la capa ODS tiene que TERMINAR, y terminar
+        # incluye el caso de que alguna tabla se haya caido. Con all_success,
+        # ods_completo se quedaba sin ejecutar y arrastraba a toda la capa BDS.
+        ods_completo = EmptyOperator(
+            task_id="ods_completo", trigger_rule="all_done",
+            doc_md=("La capa ODS termino. **No** significa que todas sus tablas "
+                    "hayan salido bien: significa que ninguna quedo pendiente. "
+                    "Quien decide si una tabla BDS puede correr es su propio "
+                    "`DEPENDE_DE_ODS`."))
+        bds_completo = EmptyOperator(task_id="bds_completo", trigger_rule="all_done")
+        fin = PythonOperator(
+            task_id="fin",
+            python_callable=resumen_de_la_corrida,
+            trigger_rule="all_done",
+            retries=0,
+            execution_timeout=timedelta(minutes=5),
+            doc_md=("Resumen de la corrida. Falla si alguna tabla fallo: que un "
+                    "fallo no trunque el proceso no quiere decir que se oculte. "
+                    "Sin esta tarea la corrida saldria en verde con tablas en "
+                    "rojo dentro."))
 
         tareas: dict[int, PythonOperator] = {}
 
@@ -669,7 +879,20 @@ with DAG(
                     tarea_anterior = None
                     for proceso_cfg in grupo_cfg["PROCESOS"]:
                         pid = int(proceso_cfg["ID_PROCESO"])
-                        task = crear_tarea(PLAN.nodos[pid], ejecutar_ods)
+                        # all_done en TODA la capa ODS, y es deliberado.
+                        #
+                        # ODS no declara dependencias de datos -DEPENDE_DE esta
+                        # prohibido ahi-, asi que el encadenamiento por ORDEN y
+                        # por PARALELO=false es orden de ejecucion, no de datos:
+                        # existe para no abrir veinte conexiones al core a la
+                        # vez, no porque una tabla necesite a la anterior.
+                        #
+                        # Con all_success, una tabla caida bloqueaba el resto de
+                        # su cadena, el siguiente nivel de ORDEN, ods_completo y
+                        # con eso la capa BDS entera. Un incidente en una tabla
+                        # se llevaba por delante la carga del dia.
+                        task = crear_tarea(PLAN.nodos[pid], ejecutar_ods,
+                                           trigger_rule="all_done")
                         tareas[pid] = task
                         if not grupo_cfg.get("PARALELO", False) and tarea_anterior is not None:
                             tarea_anterior >> task
@@ -689,7 +912,32 @@ with DAG(
             ):
                 for proceso_cfg in grupo_cfg["PROCESOS"]:
                     pid = int(proceso_cfg["ID_PROCESO"])
-                    task = crear_tarea(PLAN.nodos[pid], ejecutar_bds)
+                    # Los padres de una tarea BDS son de UNA de dos clases, y
+                    # nunca de las dos a la vez (lo garantiza construir_plan):
+                    #
+                    #   con DEPENDE_DE -> dependencias de DATOS entre procesos
+                    #       BDS. all_success: si el insumo fallo, esta no corre.
+                    #   sin DEPENDE_DE -> solo ORDEN (el nivel anterior, o
+                    #       ods_completo). all_done: el nivel anterior puede
+                    #       traer tablas caidas y eso no es razon para no
+                    #       intentar esta, que no depende de ellas.
+                    #
+                    # Lo que esta tarea necesite de la capa ODS NO se expresa
+                    # aqui: va por DEPENDE_DE_ODS y lo comprueba ejecutar_bds,
+                    # porque una sola trigger_rule no puede decir dos cosas
+                    # distintas a padres distintos.
+                    deps_bds = dependencias_proceso(proceso_cfg, [])
+                    requiere = [task_id_completo(PLAN.nodos[d])
+                                for d in PLAN.ods_requeridas.get(pid, [])]
+                    # Una dependencia de ODS y una de BDS son la misma clase de
+                    # cosa -datos- y piden la misma regla. Solo quien no declara
+                    # ninguna cuelga de 'ods_completo', que es orden.
+                    con_datos = bool(deps_bds or requiere)
+                    task = crear_tarea(
+                        PLAN.nodos[pid], ejecutar_bds,
+                        trigger_rule="all_success" if con_datos else "all_done",
+                        tareas_ods=requiere,
+                    )
                     tareas[pid] = task
                     tareas_bds.append(task)
 

@@ -1,5 +1,5 @@
 """
-etl_bt_parquet_singlestore - Extraccion a Parquet y carga a STG.
+STG_BT_PARQUET - Extraccion a Parquet y carga a STG.
 
     extraer_parquet  ->  verificar_parquet  ->  cargar_singlestore  ->  limpiar_parquet
 
@@ -83,7 +83,7 @@ if DIR_ACTUAL not in sys.path:
 # POOL
 # ============================================================================
 # Limita cuantas tareas golpean SingleStore a la vez, en este DAG y en el
-# resto. Sin pool, un backfill de BT_DATAHUB y este DAG pueden abrir todas
+# resto. Sin pool, un backfill de BDS_DATAHUB_PROCESOS y este DAG pueden abrir todas
 # las conexiones que quieran y tumbar la base.
 #
 # Por defecto queda en default_pool para que el DAG funcione tal cual. Cuando
@@ -186,7 +186,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="etl_bt_parquet_singlestore",
+    dag_id="STG_BT_PARQUET",
     description="Extraccion a Parquet en carpeta externa y carga a STG",
     start_date=datetime(2026, 1, 1),
     schedule=None,
@@ -228,7 +228,7 @@ with DAG(
             ),
         ),
     },
-    tags=["manual", "etl", "parquet", "singlestore", "data-engineering", "produccion"],
+    tags=["produccion", "manual", "stg", "bt", "parquet", "singlestore"],
 ) as dag:
 
     # execution_timeout es obligatorio: sin el, una consulta trabada contra BT

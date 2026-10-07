@@ -48,7 +48,7 @@ INVOCACION — la hace el DAG, no se ejecuta a mano
       --particiones 4 \
       --salida-parquet /opt/spark-data/parquet/ventas \
       --tabla-bitacora airflow_bitacora_procesos \
-      --dag-id orquestador_json --task-id consolidar \
+      --dag-id UTIL_ORQUESTADOR_JSON --task-id consolidar \
       --run-id manual__2026-08-22 --intento 1 --fecha 2026-08-22
 
 Las credenciales NO van por argumento: llegan por variables de entorno

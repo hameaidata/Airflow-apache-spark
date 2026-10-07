@@ -4,7 +4,7 @@ s2sql_comun - Piezas compartidas del pipeline SingleStore -> SQL Server 2022.
 Todo lo de este pipeline lleva el prefijo s2sql para que se distinga de un
 vistazo del pipeline BT (etl/) y del de DataHub (etl-datahub/):
 
-    DAG            S2SQL_EXPORT          airflow/dags/production/dag_s2sql_export.py
+    DAG            EXP_S2SQL_CARGA          airflow/dags/production/dag_exp_s2sql_carga.py
     Modulos        etl_s2sql/s2sql_*.py
     Variable       S2SQL_EXPORT_CONFIG   airflow/config/json/
     Tablas         CTL.CTL_S2SQL_*       en SQL Server (el destino)
@@ -21,7 +21,7 @@ La Variable de Airflow NO lista tablas. Solo tiene infraestructura: nombres de
 Connection, rutas, tamanos de lote. Asi el DAG no necesita consultar SQL Server
 para dibujar su grafo, que es lo que lo dejaria roto cada vez que el destino
 este caido. Las tareas por tabla se crean en tiempo de EJECUCION, con el
-catalogo ya leido (ver dag_s2sql_export.py).
+catalogo ya leido (ver dag_exp_s2sql_carga.py).
 
 CONEXIONES
 ----------

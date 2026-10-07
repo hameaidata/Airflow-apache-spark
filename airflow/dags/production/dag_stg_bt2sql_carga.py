@@ -3,7 +3,7 @@ STG_BT2SQL_CARGA - Bantotal (IBM i) -> Parquet -> STG en SQL Server.
 
     extraer_parquet  ->  verificar_parquet  ->  cargar_stg  ->  limpiar_parquet
 
-Misma estructura que etl_bt_parquet_singlestore: las dos mitades estan
+Misma estructura que STG_BT_PARQUET: las dos mitades estan
 separadas y se comunican por la bitacora, no por rutas fijas en el codigo.
 
 verificar_parquet es una compuerta: mira los archivos del lote EN DISCO y, si
@@ -51,7 +51,7 @@ con el Fernet key.
 DESPUES DE ESTE DAG
 -------------------
 Este DAG llega hasta STG. El paso de STG a ODS y de ODS a BDS lo hacen los
-stored procedures del DataHub, orquestados aparte, igual que BT_DATAHUB hace
+stored procedures del DataHub, orquestados aparte, igual que BDS_DATAHUB_PROCESOS hace
 hoy con SingleStore.
 """
 

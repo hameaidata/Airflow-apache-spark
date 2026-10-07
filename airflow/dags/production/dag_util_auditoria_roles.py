@@ -1,5 +1,5 @@
 """
-Auditoría de roles y permisos
+UTIL_AUDITORIA_ROLES - Auditoría semanal de roles y permisos
 
 Verifica semanalmente que los roles de Airflow siguen coincidiendo con lo
 definido en `config/matriz_roles.py`, y que nadie acumula combinaciones de
@@ -246,7 +246,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="auditoria_roles",
+    dag_id="UTIL_AUDITORIA_ROLES",
     description="Verifica que los roles y la segregación de funciones no se desvían",
     default_args=default_args,
     schedule="0 7 * * 1",          # lunes 07:00
@@ -257,7 +257,7 @@ with DAG(
     # Una hora deja margen para reintentos sin dejar colgada la corrida
     # semanal hasta el lunes siguiente.
     dagrun_timeout=timedelta(hours=1),
-    tags=["continuo", "seguridad", "auditoria", "cumplimiento"],
+    tags=["produccion", "continuo", "utilidad", "seguridad", "auditoria", "cumplimiento"],
 ) as dag:
 
     t1 = PythonOperator(

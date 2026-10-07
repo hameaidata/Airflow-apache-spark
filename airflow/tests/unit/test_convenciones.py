@@ -31,26 +31,27 @@ DIR_DAGS = DIR_RAIZ_DAGS / "production"
 # ============================================================================
 # LISTA DE EXCEPCIONES
 # ----------------------------------------------------------------------------
-# Agregados el 2026-09-30, al escribir la convencion. Quitar segun se migren.
+# VACIA desde el 2026-10-07. Los ocho dag_id siguen la convencion y los ocho
+# archivos se llaman dag_<dag_id en minusculas>.py.
 #
-# Salieron cinco el mismo dia, y no por haberse renombrado: Extraer_datos_bt,
-# carga_parquet_singlestore, VALIDAR_CONEXIONES, ODS_PROCESOS_DATAHUB y
-# BDS_PROCESOS_DATAHUB venian de examples/ y templates/, que ahora estan en
-# .airflowignore. El scheduler ya no los registra, asi que no son DAGs de
-# nadie: eran cuatro entradas de mas en la interfaz.
+# Historia, para que no se repita: la lista nacio con siete entradas el
+# 2026-09-30. Cinco salieron ese mismo dia y NO por haberse renombrado
+# -Extraer_datos_bt, carga_parquet_singlestore, VALIDAR_CONEXIONES,
+# ODS_PROCESOS_DATAHUB y BDS_PROCESOS_DATAHUB venian de examples/ y templates/,
+# que entraron en .airflowignore: dejaron de ser DAGs de nadie-. Las seis que
+# quedaban se renombraron de verdad el 2026-10-07:
+#
+#     etl_bt_parquet_singlestore  ->  STG_BT_PARQUET
+#     BT_DATAHUB                  ->  BDS_DATAHUB_PROCESOS
+#     S2SQL_EXPORT                ->  EXP_S2SQL_CARGA
+#     orquestador_json            ->  UTIL_ORQUESTADOR_JSON
+#     auditoria_roles             ->  UTIL_AUDITORIA_ROLES
+#     bt_odbc_test                ->  LAB_BT_ODBC
+#
+# Que la lista este vacia es el estado deseado, no una casualidad: agregar una
+# entrada aqui es declarar deuda por escrito, y el test de abajo pone tope.
 # ============================================================================
-LEGADO_NOMBRE = {
-    # Del pipeline parquet -> SingleStore
-    "etl_bt_parquet_singlestore",       # -> STG_BT_PARQUET
-    "etl_bt_parquet_singlestore_spark", # -> STG_BT_PARQUET_SPARK
-    # Utilidades
-    "orquestador_json",                 # -> UTIL_ORQUESTADOR_JSON
-    "auditoria_roles",                  # -> UTIL_AUDITORIA_ROLES
-    "bt_odbc_test",                     # -> LAB_BT_ODBC
-    # Declaran su dag_id como constante de modulo
-    "BT_DATAHUB",                       # -> ODS_DATAHUB_PROCESOS / BDS_...
-    "S2SQL_EXPORT",                     # -> EXP_S2SQL_CARGA
-}
+LEGADO_NOMBRE: set[str] = set()
 
 # Archivos que todavia no declaran su cadencia con etiquetas.
 LEGADO_CADENCIA: set[str] = set()
@@ -113,7 +114,7 @@ def archivos_de_dag() -> list[Path]:
 def dag_ids_de(texto: str) -> list[str]:
     """Los dag_id del archivo, resolviendo la forma dag_id=CONSTANTE.
 
-    dag_bt_datahub.py y dag_s2sql_export.py no escriben el nombre dentro de
+    dag_bds_datahub_procesos.py y dag_exp_s2sql_carga.py no escriben el nombre dentro de
     DAG(): lo declaran arriba como DAG_ID = "..." y lo pasan por variable.
     Buscando solo dag_id="..." esos dos DAGs eran invisibles para todos los
     tests de nombre -que es justo donde un nombre mal puesto se esconde-.
@@ -168,9 +169,12 @@ def test_la_lista_de_legado_no_crece():
         f"estos dag_id estan en LEGADO_NOMBRE pero ya no existen: {sorted(sobran)}.\n"
         f"Quitelos de la lista: ya estan migrados."
     )
-    assert len(LEGADO_NOMBRE) <= 10, (
-        f"LEGADO_NOMBRE tiene {len(LEGADO_NOMBRE)} entradas y el tope es 10. "
-        f"La lista esta para encoger, no para crecer."
+    assert len(LEGADO_NOMBRE) == 0, (
+        f"LEGADO_NOMBRE tiene {len(LEGADO_NOMBRE)} entrada(s) y desde el "
+        f"2026-10-07 el tope es CERO: los ocho DAGs siguen la convencion.\n"
+        f"Un dag_id nuevo que no la siga se arregla antes de entrar, no se "
+        f"anota aqui. Si de verdad hace falta una excepcion, suba el tope en "
+        f"el mismo commit y explique por que: asi queda en el historial."
     )
 
 
@@ -178,7 +182,7 @@ def test_el_archivo_se_llama_como_el_dag():
     """dag_<dag_id en minusculas>.py.
 
     Cuando la interfaz muestra un DAG roto, uno quiere saber que archivo abrir
-    sin buscar. Hoy Extraer_datos_bt vive en orquestador_json.py.
+    sin buscar.
     """
     malos = []
     for archivo in archivos_de_dag():
@@ -253,7 +257,7 @@ def test_toda_tarea_tiene_execution_timeout():
 
         # Un execution_timeout en default_args lo hereda CADA tarea del DAG.
         # Contarlo como una sola cobertura era el error que hacia fallar a
-        # auditoria_roles.py y orquestador_json.py, que si estaban protegidos.
+        # dag_util_auditoria_roles.py y dag_util_orquestador_json.py, que si estaban protegidos.
         bloque = re.search(r"default_args\s*=\s*\{(.*?)\n\}", texto, re.S)
         if bloque and "execution_timeout" in bloque.group(1):
             continue
@@ -434,3 +438,39 @@ def test_spark_no_recibe_credenciales_por_configuracion():
         if re.search(r'--conf[^\n]*password', texto, re.I):
             malos.append(f"{archivo.name}: pasa la clave por --conf")
     assert not malos, "\n  " + "\n  ".join(malos)
+
+
+def test_ningun_paquete_de_plugins_tapa_la_biblioteca_estandar():
+    """Una carpeta en plugins/ que se llame igual que un modulo estandar es una
+    mina.
+
+    Airflow ANADE plugins/ al final de sys.path, asi que en operacion normal
+    gana la biblioteca estandar y no pasa nada. La prueba de que es asi es que
+    Airflow arranca: si ganara plugins/, airflow/configuration.py moriria en
+    'import logging' al primer arranque.
+
+    El problema es cualquier otra cosa que ponga plugins/ al PRINCIPIO de
+    sys.path -un script de diagnostico, un test, una herramienta-. Ahi el
+    paquete del proyecto gana y el fallo sale lejisimos del motivo:
+
+        AttributeError: module 'logging' has no attribute 'getLogger'
+
+    Paso de verdad el 2026-10-07, con plugins/logging/ y plugins/secrets/
+    vacios -un __init__.py de cero bytes cada uno- que nadie importaba. Se
+    borraron. Este test existe para que no vuelvan.
+    """
+    import sys
+
+    carpeta = RAIZ / "airflow" / "plugins"
+    estandar = set(sys.stdlib_module_names)
+    choques = sorted(
+        d.name for d in carpeta.iterdir()
+        if d.is_dir() and (d / "__init__.py").exists() and d.name in estandar
+    )
+    assert not choques, (
+        f"estos paquetes de plugins/ se llaman igual que un modulo de la "
+        f"biblioteca estandar: {choques}.\n"
+        f"Renombrelos (por ejemplo bsg_logging, bsg_secrets): cualquier "
+        f"proceso que ponga plugins/ al principio de sys.path importara estos "
+        f"en vez del estandar, y el error no mencionara plugins/ por ningun lado."
+    )

@@ -180,6 +180,36 @@ cifradas con el Fernet key. En el campo Extra:
 > directamente, como hace el pipeline S2SQL: la ruta del jar y la clase salen de
 > la configuración del proyecto y solo las credenciales salen de la Connection.
 
+### Si la Connection es de tipo Generic, declare el motor
+
+`Generic` es el tipo que se elige cuando no hay un proveedor instalado para ese
+sistema, y **no dice nada del motor**. Eso importa en cuanto hay más de una
+Connection `Generic` en el proyecto —aquí hay dos, `CONEXION_BANTOTAL` al core y
+`CONEXION_SQLSERVER` al destino—: cualquier regla que traduzca `generic` a un
+motor fijo acierta en una y se equivoca en la otra **en silencio**. Arma una URL
+`jdbc:as400://` apuntando a SQL Server y carga el driver de IBM i para escribir
+en una tabla de SQL Server. El error que sale de ahí no menciona el tipo de
+conexión por ningún lado, así que se buscan horas en el sitio equivocado.
+
+Por eso cada Connection `Generic` declara su motor en el campo **Extra**:
+
+| Connection | Extra mínimo |
+|---|---|
+| `CONEXION_BANTOTAL` | `{"motor": "as400", "libraries": "GPPPBTDB", "naming": "system"}` |
+| `CONEXION_SQLSERVER` | `{"motor": "mssql"}` |
+
+Si falta, `motor_de_conexion()` en `airflow/plugins/utils/spark_config.py` lo
+deduce del **puerto**, pero solo cuando el puerto pertenece a un motor y nada
+más: 1433 → `mssql`, 8471/9471/446 → `as400`, 5432 → `postgres`, 1521 →
+`oracle`, 50000 → `db2`. El **3306 queda fuera a propósito**: lo usan MySQL y
+SingleStore por igual, y adivinar el motor por un puerto compartido es el error
+que esta función existe para evitar. Como último recurso, la presencia de
+`libraries` o `naming` en el Extra se toma como declaración de IBM i, porque
+esas propiedades solo las entiende ese driver.
+
+Sin ninguna pista, la tarea falla **al arrancar** —no a mitad de la escritura—
+con el mensaje que dice qué agregar y dónde.
+
 ### Con jaydebeapi, como en el resto del proyecto
 
 ```python

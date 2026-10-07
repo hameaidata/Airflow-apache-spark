@@ -83,9 +83,9 @@ Para anadir otro motor, agregue una entrada en `JDBC_DRIVERS` y una rama en
 
 ## DAGs de produccion ya conectados al plugin
 
-- `airflow/dags/production/orquestador_json.py`
+- `airflow/dags/production/dag_util_orquestador_json.py`
 
-El cambio importante en `orquestador_json` es que cada paso Spark ahora usa su
+El cambio importante en `UTIL_ORQUESTADOR_JSON` es que cada paso Spark ahora usa su
 propia clave `"conexion"` del manifiesto, en vez de compartir una credencial
 global por XCom.
 
@@ -96,5 +96,5 @@ Los plugins se cargan al arrancar. Despues de cambiar estos archivos:
 ```powershell
 docker compose -f docker-compose.windows.yml restart airflow-webserver airflow-scheduler
 docker compose -f docker-compose.windows.yml exec airflow-scheduler airflow dags list-import-errors
-docker compose -f docker-compose.windows.yml exec airflow-scheduler airflow dags test orquestador_json 2026-09-08
+docker compose -f docker-compose.windows.yml exec airflow-scheduler airflow dags test UTIL_ORQUESTADOR_JSON 2026-09-08
 ```

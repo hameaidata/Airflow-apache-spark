@@ -5,5 +5,5 @@ mapa completo de nombres (DAG, Variable, tablas de control y rutas).
 
 Este paquete NO debe definir DAGs ni ejecutar nada al importarse: airflow/dags/
 .airflowignore lo excluye del DagBag justamente para que el scheduler no lo
-parsee cada 30 segundos. Quien define el DAG es dag_s2sql_export.py.
+parsee cada 30 segundos. Quien define el DAG es dag_exp_s2sql_carga.py.
 """

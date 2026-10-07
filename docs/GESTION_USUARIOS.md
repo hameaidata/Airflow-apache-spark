@@ -61,7 +61,7 @@ prohibidas:
 - `BSG_CustodioCredenciales` + `BSG_IngenieroDatos`
 - `BSG_Auditor` + cualquier otro
 
-El DAG `auditoria_roles` marca estas combinaciones como incumplimiento cada
+El DAG `UTIL_AUDITORIA_ROLES` marca estas combinaciones como incumplimiento cada
 lunes.
 
 ---
@@ -267,7 +267,7 @@ Los archivos quedan dentro del contenedor. Para traerlos al equipo:
 docker compose -f docker-compose.windows.yml cp airflow-webserver:/tmp/usuarios.json .\usuarios.json
 ```
 
-**Verificación automática:** el DAG `auditoria_roles` corre los lunes a las 7:00
+**Verificación automática:** el DAG `UTIL_AUDITORIA_ROLES` corre los lunes a las 7:00
 y falla si detecta permisos no autorizados o combinaciones de roles prohibidas.
 Ese historial de ejecuciones es la evidencia de que el control se revisa
 periódicamente, no solo que se configuró una vez.

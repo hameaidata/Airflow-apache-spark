@@ -3,7 +3,7 @@ Matriz de roles — origen unico de verdad.
 
 Este archivo lo leen dos cosas:
   1. aplicar_roles.py           — crea y actualiza los roles
-  2. dags/production/auditoria_roles.py — verifica semanalmente que no cambiaron
+  2. dags/production/dag_util_auditoria_roles.py — verifica semanalmente que no cambiaron
 
 Vive en $AIRFLOW_HOME/config, que Airflow anade al sys.path al arrancar, por lo
 que se puede importar desde un DAG con  `from matriz_roles import ROLES`.

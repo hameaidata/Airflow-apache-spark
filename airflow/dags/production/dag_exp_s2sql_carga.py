@@ -1,5 +1,5 @@
 """
-S2SQL_EXPORT - Exporta tablas de SingleStore a SQL Server 2022.
+EXP_S2SQL_CARGA - Exporta tablas de SingleStore a SQL Server 2022.
 
                                   +-- tabla.extraer -> tabla.cargar --+
     inicio -> preparar_lote ------+-- tabla.extraer -> tabla.cargar --+-> cerrar_lote
@@ -32,7 +32,7 @@ Los declara cada fila del catalogo, no el DAG:
 
 NOMENCLATURA DE ESTE PIPELINE
 -----------------------------
-    DAG          S2SQL_EXPORT
+    DAG          EXP_S2SQL_CARGA
     Modulos      etl_s2sql/s2sql_comun.py, s2sql_extraccion.py, s2sql_carga.py
     Variable     S2SQL_EXPORT_CONFIG
     Tablas       CTL.CTL_S2SQL_CATALOGO / _LOTE / _LOG_CARGA   (en SQL Server)
@@ -83,7 +83,7 @@ from airflow.operators.python import PythonOperator
 
 logger = logging.getLogger(__name__)
 
-DAG_ID = "S2SQL_EXPORT"
+DAG_ID = "EXP_S2SQL_CARGA"
 
 # etl_s2sql/ vive junto a este archivo. Airflow pone dags/ en sys.path, pero no
 # dags/production/. Se usa append y no insert(0): insertar al principio pondria
@@ -207,7 +207,7 @@ with DAG(
     dagrun_timeout=timedelta(hours=8),
     # Sin esto, "{{ ti.xcom_pull(...) }}" entrega la CADENA 'None' cuando no hay
     # XCom, y un 'if batch_id:' la da por buena. Con el render nativo llega el
-    # None de Python. Ver el mismo comentario en dag_bt_parquet_singlestore.py:
+    # None de Python. Ver el mismo comentario en dag_stg_bt_parquet.py:
     # ya costo un fallo silencioso una vez.
     render_template_as_native_obj=True,
     default_args=default_args,
@@ -235,7 +235,7 @@ with DAG(
             ),
         ),
     },
-    tags=["manual", "s2sql", "singlestore", "sqlserver", "export", "produccion"],
+    tags=["produccion", "manual", "exp", "s2sql", "singlestore", "sqlserver"],
 ) as dag:
 
     inicio = EmptyOperator(task_id="inicio")

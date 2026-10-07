@@ -131,7 +131,7 @@ Hoy hay **once `dag_id` en tres estilos distintos**:
 
 ```
 BT2SQL_STG  ODS_PROCESOS_DATAHUB  VALIDAR_CONEXIONES     mayúsculas
-etl_bt_parquet_singlestore  carga_parquet_singlestore    minúsculas
+STG_BT_PARQUET  carga_parquet_singlestore    minúsculas
 Extraer_datos_bt                                          mezclado
 ```
 
@@ -200,7 +200,7 @@ Cada DAG lleva al menos tres:
 
 1. **Ambiente**: `produccion` o `laboratorio`
 2. **Cadencia**: `continuo`, `manual` o `disparado`
-3. **Capa**: `stg`, `ods`, `bds`, `cu`, `utilidad`
+3. **Capa**: `stg`, `ods`, `bds`, `cu`, `exp`, `utilidad`
 
 Y las que quiera después: `bantotal`, `sqlserver`, `spark`...
 
@@ -221,7 +221,7 @@ airflow/dags/production/
 **El nombre del archivo es `dag_` + el `dag_id` en minúsculas.** Suena trivial
 y no lo es: cuando la interfaz muestra `STG_BT2SQL_CARGA` roto, uno quiere
 saber qué archivo abrir sin buscar. Hoy `Extraer_datos_bt` está en
-`orquestador_json.py` y no hay forma de adivinarlo.
+`dag_util_orquestador_json.py` y no hay forma de adivinarlo.
 
 **Un DAG por archivo.** Dos DAGs en un archivo significa que un error de
 sintaxis los rompe los dos.
@@ -335,13 +335,10 @@ No de golpe. Por orden de riesgo:
    rompe nada.
 3. **Crear las Connections nuevas** junto a las viejas, apuntar las Variables,
    verificar, borrar las viejas.
-4. **Renombrar los `dag_id`.** Es lo más disruptivo: cambiar un `dag_id`
-   **pierde el historial** de ese DAG, porque Airflow lo trata como uno nuevo.
-   Hágalo en un corte planificado, no un martes cualquiera.
-
-El paso 4 es opcional. Si el historial de corridas importa más que la
-consistencia de nombres, es perfectamente defendible dejar los `dag_id`
-actuales y aplicar la convención solo a los nuevos.
+4. ~~**Renombrar los `dag_id`.**~~ **Hecho el 2026-10-07.** Ver la sección 9.
+   Era lo más disruptivo, y el motivo sigue en pie para la próxima vez: cambiar
+   un `dag_id` **pierde el historial** de ese DAG, porque Airflow lo trata como
+   uno nuevo.
 
 ---
 
@@ -405,13 +402,13 @@ Deben salir **ocho**, y ninguno de la tabla de arriba.
 | `dag_id` | Archivo | Cadencia |
 |---|---|---|
 | `STG_BT2SQL_CARGA` | `dag_stg_bt2sql_carga.py` | `manual` |
-| `BT_DATAHUB` | `dag_bt_datahub.py` | `manual` |
-| `S2SQL_EXPORT` | `dag_s2sql_export.py` | `manual` |
-| `etl_bt_parquet_singlestore` | `dag_bt_parquet_singlestore.py` | `manual` |
-| `etl_bt_parquet_singlestore_spark` | `dag_bt_parquet_singlestore_spark.py` | `manual` |
-| `auditoria_roles` | `auditoria_roles.py` | `continuo` |
-| `orquestador_json` | `orquestador_json.py` | `disparado` |
-| `bt_odbc_test` | `dag_conexion.py` | `manual` |
+| `BDS_DATAHUB_PROCESOS` | `dag_bds_datahub_procesos.py` | `manual` |
+| `EXP_S2SQL_CARGA` | `dag_exp_s2sql_carga.py` | `manual` |
+| `STG_BT_PARQUET` | `dag_stg_bt_parquet.py` | `manual` |
+| `STG_BT2SQL_CARGA_SPARK` | `dag_stg_bt2sql_carga_spark.py` | `manual` |
+| `UTIL_AUDITORIA_ROLES` | `dag_util_auditoria_roles.py` | `continuo` |
+| `UTIL_ORQUESTADOR_JSON` | `dag_util_orquestador_json.py` | `disparado` |
+| `LAB_BT_ODBC` | `dag_lab_bt_odbc.py` | `manual` |
 
 `BT2SQL_STG` se renombró a `STG_BT2SQL_CARGA` y su archivo a
 `dag_stg_bt2sql_carga.py`. Se pudo renombrar sin pensarlo dos veces porque
@@ -419,7 +416,7 @@ Deben salir **ocho**, y ninguno de la tabla de arriba.
 siete sí lo tienen, y por eso siguen en la lista de excepciones con su nombre
 propuesto al lado, esperando una ventana en que valga la pena perderlo.
 
-### La credencial de `dag_conexion.py`
+### La credencial de `dag_lab_bt_odbc.py`
 
 Tenía el usuario y la contraseña de **BT PREPRODUCCIÓN** escritos en el
 archivo. Estaban en tres sitios a la vez: en git con todo su historial, dentro
@@ -449,9 +446,9 @@ atascada ahí bloquea **todas** las siguientes, sin error y sin aviso.
 
 | DAG | Tope puesto | Por qué ese |
 |---|---|---|
-| `etl_bt_parquet_singlestore_spark` | 10 h | dos tareas de 4 h más una de 5 min |
-| `orquestador_json` | 12 h | el manifiesto decide cuántas tareas, el peor caso no está acotado por el código |
-| `auditoria_roles` | 1 h | tres tareas de 15 min; margen para reintentos sin colgarse hasta el lunes siguiente |
+| `STG_BT2SQL_CARGA_SPARK` | 10 h | extracción y carga de 4 h más las tres tareas cortas |
+| `UTIL_ORQUESTADOR_JSON` | 12 h | el manifiesto decide cuántas tareas, el peor caso no está acotado por el código |
+| `UTIL_AUDITORIA_ROLES` | 1 h | tres tareas de 15 min; margen para reintentos sin colgarse hasta el lunes siguiente |
 
 ### Tres errores que tenía la propia comprobación
 
@@ -463,12 +460,77 @@ en la dirección cómoda**:
    Ahora recorre `airflow/dags/` entero y aplica los patrones de
    `.airflowignore`, que es exactamente lo que hace el DagBag.
 2. **No contaba `execution_timeout` en `default_args`**, donde lo hereda cada
-   tarea. Denunciaba a `auditoria_roles.py` y `orquestador_json.py`, que sí
+   tarea. Denunciaba a `dag_util_auditoria_roles.py` y `dag_util_orquestador_json.py`, que sí
    estaban protegidos, y exigía un plazo a los `EmptyOperator`, que terminan en
    el mismo instante en que arrancan.
-3. **No resolvía `dag_id=DAG_ID`.** `dag_bt_datahub.py` y `dag_s2sql_export.py`
+3. **No resolvía `dag_id=DAG_ID`.** `dag_bds_datahub_procesos.py` y `dag_exp_s2sql_carga.py`
    declaran el nombre arriba como constante, así que eran invisibles para todos
    los tests de nombre — justo donde un nombre mal puesto se esconde.
 
 Un test que se equivoca hacia el «todo bien» es peor que no tenerlo: da una
 garantía que no existe.
+
+
+---
+
+## 9. Lo que se aplicó el 2026-10-07
+
+### Los seis renombres
+
+`LEGADO_NOMBRE` quedó **vacía**, y el tope del test que la vigila bajó de 10 a
+cero: a partir de ahora un `dag_id` que no siga la convención se arregla antes
+de entrar, no se anota como deuda.
+
+| Antes | Ahora | Archivo |
+|---|---|---|
+| `etl_bt_parquet_singlestore` | `STG_BT_PARQUET` | `dag_stg_bt_parquet.py` |
+| `BT_DATAHUB` | `BDS_DATAHUB_PROCESOS` | `dag_bds_datahub_procesos.py` |
+| `S2SQL_EXPORT` | `EXP_S2SQL_CARGA` | `dag_exp_s2sql_carga.py` |
+| `orquestador_json` | `UTIL_ORQUESTADOR_JSON` | `dag_util_orquestador_json.py` |
+| `auditoria_roles` | `UTIL_AUDITORIA_ROLES` | `dag_util_auditoria_roles.py` |
+| `bt_odbc_test` | `LAB_BT_ODBC` | `dag_lab_bt_odbc.py` |
+
+Los dos que ya cumplían no se tocaron: `STG_BT2SQL_CARGA` y
+`STG_BT2SQL_CARGA_SPARK`, que son el pipeline Bantotal → SQL Server y el eje
+del proyecto.
+
+### El precio, dicho antes de que se note
+
+Airflow identifica un DAG por su `dag_id`, no por su archivo. Al cambiar el
+`dag_id`:
+
+- **El historial de corridas del nombre viejo no se migra.** Sigue en la base
+  de metadatos, pero colgando de un `dag_id` que ya no existe en ningún
+  archivo.
+- **Los seis nombres viejos aparecen en la interfaz como DAGs sin archivo**
+  («removed»). No se ejecutan y no estorban más que visualmente, pero hay que
+  borrarlos a mano: en la lista de DAGs, el botón de la papelera en cada uno.
+  Borrar ahí elimina el historial de ese `dag_id`; si hace falta conservarlo,
+  expórtelo antes.
+- **Las pausas se reinician.** Un DAG que estaba en pausa con el nombre viejo
+  aparece con el estado por defecto en el nombre nuevo. Reviselo antes de
+  dejarlo correr.
+- **Lo que no se rompe:** ningún DAG dispara a otro por `dag_id` en este
+  proyecto, así que no hay `TriggerDagRunOperator` ni `ExternalTaskSensor` que
+  quedara apuntando al vacío. Se verificó archivo por archivo.
+
+### Por qué `BDS_DATAHUB_PROCESOS` y no `ODS_...`
+
+Ese DAG orquesta la capa ODS y después la BDS **en un solo DAG**, así que
+ninguna capa sola lo describe. Se nombró por el producto final —la capa BDS— y
+lleva las dos etiquetas, `bds` y `ods`, para que el filtro de la interfaz lo
+encuentre por cualquiera de las dos.
+
+Lo correcto según la convención sería partirlo en dos DAGs, `ODS_DATAHUB_PROCESOS`
+y `BDS_DATAHUB_PROCESOS`, con el segundo esperando al primero. Eso no es un
+renombre: es un cambio de grafo, con su propia validación. Queda pendiente y
+anotado aquí para que no se pierda.
+
+### Etiquetas completadas
+
+De paso se normalizaron las etiquetas de los seis, que es lo que hace útil el
+filtro de la interfaz. Faltaba el ambiente en `LAB_BT_ODBC` (ahora
+`laboratorio`), la capa en cuatro, y `BDS_DATAHUB_PROCESOS` las traía en
+MAYÚSCULAS, que para el filtro son etiquetas distintas de las minúsculas que
+usa el resto. Se agregó `exp` a la lista de capas válidas: `EXP` ya era una
+capa legítima en el `dag_id` y no tenía etiqueta.

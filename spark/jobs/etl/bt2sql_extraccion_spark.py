@@ -134,10 +134,105 @@ def parsear_tipos(tipos_str, tabla: str = "") -> dict[str, dict]:
             mapa[col] = {"type": "bigint"}
         elif tipo in ("float", "double", "real"):
             mapa[col] = {"type": "float"}
+        elif tipo == "date":
+            mapa[col] = {"type": "date"}
+        elif tipo.startswith(("datetime", "timestamp", "smalldatetime")):
+            mapa[col] = {"type": "timestamp"}
+        elif tipo == "bit":
+            # Se trata como entero y no como booleano: en el core un indicador
+            # viene como 0/1 numerico, y un BooleanType en el parquet obliga a
+            # convertir otra vez al escribir en un BIT de SQL Server.
+            mapa[col] = {"type": "int"}
         else:
             logger.warning("[%s] tipo no reconocido %r en %r: se trata como texto",
                            tabla, tipo, col)
             mapa[col] = {"type": "string"}
+    return mapa
+
+
+# SQL Server -> el mismo diccionario que devuelve parsear_tipos
+SQLSERVER_A_TIPO = {
+    "decimal": "decimal", "numeric": "decimal", "money": "decimal",
+    "smallmoney": "decimal",
+    "int": "int", "integer": "int", "smallint": "int", "tinyint": "int",
+    "bit": "int",
+    "bigint": "bigint",
+    "float": "float", "real": "float",
+    "char": "string", "varchar": "string", "nchar": "string",
+    "nvarchar": "string", "text": "string", "ntext": "string",
+    "uniqueidentifier": "string",
+    "date": "date",
+    "datetime": "timestamp", "datetime2": "timestamp",
+    "smalldatetime": "timestamp", "datetimeoffset": "timestamp",
+}
+
+# Las inyecta la extraccion, no vienen del core: no se leen del destino.
+COLUMNAS_INYECTADAS = {"FECHA_PROCESO", "BATCH_ID"}
+
+
+def tipos_de_destino(conn_ctl, tabla_destino: str, tabla: str) -> dict[str, dict]:
+    """Deduce los tipos leyendo la TABLA DESTINO de SQL Server.
+
+    POR QUE ESTA ES LA MEJOR FUENTE DE TIPOS
+    ----------------------------------------
+    El objetivo del cast no es estetico: es que el parquet tenga exactamente
+    los tipos que la tabla destino espera, porque si no coinciden el INSERT por
+    JDBC falla -o, peor, no falla y trunca-. Y quien sabe con certeza esos
+    tipos no es la Variable ni el catalogo: es la propia tabla destino.
+
+    Asi que el orden de preferencia es:
+
+        1. tablas[].tipos de la Variable, si esta declarado. Es el override
+           explicito y gana siempre: sirve para los casos en que el destino
+           tiene un tipo mas ancho a proposito.
+        2. INFORMATION_SCHEMA.COLUMNS de la tabla destino. No hay que
+           mantenerlo a mano y no se desincroniza nunca, porque ES el destino.
+        3. Lo que el driver JDBC infiera del core. Ultimo recurso.
+
+    Si la tabla destino no existe, se avisa y se cae al paso 3 en vez de
+    fallar: el error de "tabla destino inexistente" tiene que salir de la
+    carga, que es quien lo puede explicar bien, no de aqui.
+    """
+    partes = str(tabla_destino).replace("[", "").replace("]", "").split(".")
+    esquema, nombre = ("dbo", partes[0]) if len(partes) == 1 else (partes[0], partes[1])
+
+    filas = filas_de(conn_ctl,
+        "SELECT COLUMN_NAME, DATA_TYPE, NUMERIC_PRECISION, NUMERIC_SCALE "
+        "FROM INFORMATION_SCHEMA.COLUMNS "
+        f"WHERE TABLE_SCHEMA = '{validar(esquema, 'esquema destino')}' "
+        f"  AND TABLE_NAME = '{validar(nombre, 'tabla destino')}'")
+    if not filas:
+        logger.warning(
+            "[%s] la tabla destino %s no existe o no tiene columnas visibles: "
+            "no se pueden deducir tipos de ahi. Se usara lo que infiera el "
+            "driver JDBC, que es justo lo que suele romper la escritura.",
+            tabla, tabla_destino)
+        return {}
+
+    mapa: dict[str, dict] = {}
+    desconocidos = []
+    for f in filas:
+        col = str(f["COLUMN_NAME"])
+        if col.upper() in COLUMNAS_INYECTADAS:
+            continue
+        sql_tipo = str(f["DATA_TYPE"]).strip().lower()
+        tipo = SQLSERVER_A_TIPO.get(sql_tipo)
+        if tipo is None:
+            desconocidos.append(f"{col}:{sql_tipo}")
+            continue
+        if tipo == "decimal":
+            mapa[col] = {"type": "decimal",
+                         "precision": int(f["NUMERIC_PRECISION"] or 38),
+                         "scale": int(f["NUMERIC_SCALE"] or 0)}
+        else:
+            mapa[col] = {"type": tipo}
+
+    if desconocidos:
+        logger.warning("[%s] tipos de %s que no se saben traducir, se dejan "
+                       "como vengan: %s", tabla, tabla_destino,
+                       ", ".join(desconocidos))
+    logger.info("[%s] tipos deducidos de la tabla destino %s: %s columna(s)",
+                tabla, tabla_destino, len(mapa))
     return mapa
 
 
@@ -150,6 +245,8 @@ def aplicar_tipos(df, mapa: dict[str, dict], tabla: str):
         "bigint": T.LongType(),
         "float": T.DoubleType(),
         "string": T.StringType(),
+        "date": T.DateType(),
+        "timestamp": T.TimestampType(),
     }
     presentes = set(df.columns)
     for col, cfg in mapa.items():
@@ -162,7 +259,7 @@ def aplicar_tipos(df, mapa: dict[str, dict], tabla: str):
         else:
             destino = equivalencias[cfg["type"]]
 
-        if cfg["type"] in ("int", "bigint", "float", "decimal"):
+        if cfg["type"] in ("int", "bigint", "float", "decimal", "date", "timestamp"):
             df = df.withColumn(col, F.when(F.trim(F.col(col).cast("string")) == "", None)
                                      .otherwise(F.col(col)))
         df = df.withColumn(col, F.col(col).cast(destino))
@@ -232,6 +329,157 @@ def leer_origen(spark, url: str, clase: str, usuario: str, clave: str,
 # ============================================================================
 # BITACORA  (ctl_proceso_parquet, en SQL Server)
 # ============================================================================
+def filtrar_por_procesos(filas: list[dict], cfg: dict, tipo_ejecucion: str) -> list[dict]:
+    """Aplica la lista 'procesos' y ORDENA por prioridad.
+
+    ESTO FALTABA, Y ERA UN FALLO DE VERDAD
+    --------------------------------------
+    Hasta el 2026-10-07 este job extraia todas las tablas con activo='S' y en el
+    orden en que estuvieran escritas en la Variable: ignoraba 'procesos' por
+    completo. El resultado era que una tabla con estado=0, o con el flag del
+    calendario del dia en 0, se extraia igual. El DAG la reportaba como
+    'inactiva' en el inventario y Spark la extraia a continuacion.
+
+    Eso no es solo un dia de datos de mas: rompe la unica validacion que dice
+    que la traduccion a Spark salio bien, que es correr los dos pipelines sobre
+    el mismo dia y comparar fila a fila. El de pandas si filtra.
+
+    La semantica se copia de filtrar_procesos() de etl_bt2sql/bt2sql_extraccion.py
+    para que las dos mitades decidan igual:
+
+      - el cruce es (nombre_proceso, nombre_esquema) contra
+        (NOMBRE_PARQUET o TABLA, ESQUEMA), todo en mayusculas
+      - el proceso tiene que traer estado=1 Y el flag del dia en 1
+      - prioridad ordena; sin prioridad declarada, 99, o sea al final
+    """
+    flag = {"diario": "estado_diario",
+            "semanal": "estado_semanal",
+            "mensual": "estado_mensual"}.get(tipo_ejecucion)
+    if flag is None:
+        raise SystemExit(
+            f"tipo_ejecucion={tipo_ejecucion!r} no soportado. "
+            f"Use diario, semanal o mensual.")
+
+    declarados = cfg.get("procesos") or []
+    if not declarados:
+        raise SystemExit(
+            "La configuracion no trae 'extraccion.procesos', asi que no hay "
+            "calendario que aplicar. Declarelo en la Variable: una tabla entra "
+            "en una corrida solo si esta en 'tablas' con activo='S' Y en "
+            "'procesos' con estado=1 y el flag del dia en 1.")
+
+    activos, inactivos = {}, []
+    for p in declarados:
+        clave = (str(p.get("nombre_proceso", "")).strip().upper(),
+                 str(p.get("nombre_esquema", "")).strip().upper())
+        if int(p.get("estado", 0)) == 1 and int(p.get(flag, 0)) == 1:
+            activos[clave] = p
+        else:
+            motivo = ("estado=0" if int(p.get("estado", 0)) != 1
+                      else f"{flag}=0")
+            inactivos.append(f"{clave[0]} ({motivo})")
+
+    seleccion, fuera = [], []
+    for fila in filas:
+        nombre = str(fila.get("NOMBRE_PARQUET") or fila["TABLA"]).strip().upper()
+        clave = (nombre, str(fila["ESQUEMA"]).strip().upper())
+        proc = activos.get(clave)
+        if proc is None:
+            fuera.append(f"{clave[1]}.{fila['TABLA']} (proceso {clave[0]})")
+            continue
+        seleccion.append({**fila, "_PRIORIDAD": int(proc.get("prioridad", 99))})
+
+    logger.info("CALENDARIO tipo_ejecucion=%s (flag %s): %s de %s proceso(s) activos",
+                tipo_ejecucion, flag, len(activos), len(declarados))
+    if inactivos:
+        logger.info("  procesos que no entran hoy: %s", ", ".join(inactivos))
+    if fuera:
+        logger.info("  tablas que no entran hoy   : %s", ", ".join(fuera))
+
+    if not seleccion:
+        raise SystemExit(
+            f"Ninguna tabla declarada coincide con los procesos activos para "
+            f"tipo_ejecucion={tipo_ejecucion!r}.\n"
+            f"El cruce es tablas[].nombre_proceso + tablas[].esquema contra "
+            f"procesos[].nombre_proceso + procesos[].nombre_esquema, y el "
+            f"proceso necesita estado=1 y {flag}=1.")
+
+    seleccion.sort(key=lambda f: (f["_PRIORIDAD"], str(f["TABLA"])))
+    logger.info("ORDEN DE EXTRACCION por prioridad:")
+    for f in seleccion:
+        logger.info("  prioridad %-3s %s.%s", f["_PRIORIDAD"], f["ESQUEMA"], f["TABLA"])
+    return seleccion
+
+
+def catalogo_de_tablas(cfg: dict, conn_ctl, tipo_ejecucion: str = "diario") -> list[dict]:
+    """Devuelve las tablas por extraer, de la Variable o del catalogo.
+
+    Con origen_tablas='variable' (lo normal) la lista sale de la Variable de
+    Airflow y NO se consulta CTL_PARAMETROS_PARQUET. La ventaja no es ahorrar
+    una consulta: es que agregar una tabla pasa a ser editar un JSON versionado
+    en el repositorio, revisable en un diff, en vez de un UPDATE a mano contra
+    una tabla de produccion que nadie ve pasar.
+
+    Se normalizan las claves A MAYUSCULAS en los dos casos para que el resto
+    del job no tenga que saber de donde vino la lista.
+    """
+    origen = cfg.get("origen_tablas", "variable")
+
+    if origen == "catalogo":
+        filas = filas_de(conn_ctl, cfg["sql_parametros_parquet"])
+        if not filas:
+            raise SystemExit(
+                "origen_tablas='catalogo' y CTL_PARAMETROS_PARQUET no devolvio "
+                "ninguna tabla con ACTIVO='S'.")
+        for fila in filas:
+            fila["_PARTICION"] = (cfg.get("particiones") or {}).get(str(fila["TABLA"]))
+        logger.info("%s tabla(s) activas, leidas del CATALOGO en la base", len(filas))
+        return filtrar_por_procesos(filas, cfg, tipo_ejecucion)
+
+    if origen != "variable":
+        raise SystemExit(
+            f"origen_tablas='{origen}' no es valido. Use 'variable' o 'catalogo'.")
+
+    declaradas = cfg.get("tablas") or []
+    if not declaradas:
+        raise SystemExit(
+            "origen_tablas='variable' pero la Variable no trae ninguna tabla en "
+            "'tablas'. Agreguelas en airflow/config/json/BT2SQL_SPARK.json y "
+            "sincronice con  python scripts/sync_variables.py --solo BT2SQL_SPARK")
+
+    filas, inactivas = [], []
+    for entrada in declaradas:
+        if str(entrada.get("activo", "S")).strip().upper() != "S":
+            inactivas.append(str(entrada.get("tabla", "?")))
+            continue
+        filas.append({
+            "ESQUEMA": entrada["esquema"],
+            "TABLA": entrada["tabla"],
+            "NOMBRE_PARQUET": entrada.get("nombre_proceso") or entrada["tabla"],
+            "COLUMNAS": entrada.get("columnas") or "",
+            "FILTRO": entrada.get("filtro") or "",
+            "TIPOS": entrada.get("tipos") or "",
+            "ACTIVO": "S",
+            "TABLA_DESTINO": entrada.get("tabla_destino") or "",
+            "_PARTICION": entrada.get("particion"),
+        })
+    if not filas:
+        raise SystemExit(
+            f"Las {len(declaradas)} tabla(s) de la Variable estan todas con "
+            f"activo distinto de 'S'. No hay nada que extraer.")
+
+    logger.info("%s tabla(s) activas, leidas de la VARIABLE de Airflow", len(filas))
+    if inactivas:
+        logger.info("  omitidas por activo<>'S': %s", ", ".join(inactivas))
+    sin_particion = [f["TABLA"] for f in filas if not f.get("_PARTICION")]
+    if sin_particion:
+        logger.warning(
+            "sin columna de particion, se leen con UNA conexion: %s. "
+            "Spark no aporta paralelismo de lectura en esas tablas.",
+            ", ".join(sin_particion))
+    return filtrar_por_procesos(filas, cfg, tipo_ejecucion)
+
+
 def abrir_log(conn_ctl, cfg: dict, fila: dict, batch_id: str, fecha_proceso) -> int:
     ejecutar(conn_ctl,
              f"INSERT INTO {cfg['tb_proceso_parquet']} "
@@ -275,10 +523,23 @@ def main() -> int:
     p.add_argument("--config", required=True, help="JSON materializado por el DAG")
     p.add_argument("--batch-id", required=True)
     p.add_argument("--tipo-ejecucion", default="diario")
+    p.add_argument(
+        "--proceso", default=None,
+        help=("nombre_proceso de UNA sola tabla. Cuando el DAG dibuja una tarea "
+              "por proceso, cada tarea envia su propio job con este argumento. "
+              "Sin el, se extrae todo el calendario del dia en una sola "
+              "aplicacion, que es como corria antes y sigue sirviendo para "
+              "lanzar el job a mano."))
     args = p.parse_args()
 
     with open(args.config, encoding="utf-8") as fh:
-        cfg = json.load(fh)["extraccion"]
+        documento = json.load(fh)
+    cfg = documento["extraccion"]
+    # 'tablas' y 'origen_tablas' son del pipeline entero, no de una mitad: la
+    # misma entrada define QUE se extrae y A DONDE se sube, para no tener que
+    # agregar una tabla en dos sitios y acordarse de los dos.
+    cfg["tablas"] = documento.get("tablas", [])
+    cfg["origen_tablas"] = str(documento.get("origen_tablas", "variable")).strip().lower()
 
     # Credenciales por entorno, nunca por --conf ni por argumento: lo que va en
     # spark.* aparece en la pestana Environment de la interfaz, en ps dentro del
@@ -319,12 +580,24 @@ def main() -> int:
                          else datetime.fromisoformat(crudo[:10]).date())
         logger.info("fecha de proceso del core: %s", fecha_proceso)
 
-        catalogo = filas_de(conn_ctl, cfg["sql_parametros_parquet"])
-        if not catalogo:
-            raise SystemExit("El catalogo no devolvio ninguna tabla activa.")
-        logger.info("%s tabla(s) activas en el catalogo", len(catalogo))
+        catalogo = catalogo_de_tablas(cfg, conn_ctl, args.tipo_ejecucion)
 
-        particiones = cfg.get("particiones", {})
+        # --proceso recorta DESPUES del calendario, no antes: asi una tarea de
+        # un proceso que hoy no entra no lo extrae por la puerta de atras. El
+        # DAG ya marca esa tarea como saltada, pero el job no puede confiar en
+        # eso -se le puede invocar a mano- y el calendario tiene que valer
+        # igual por los dos caminos.
+        if args.proceso:
+            pedido = args.proceso.strip().upper()
+            catalogo = [f for f in catalogo
+                        if str(f.get("NOMBRE_PARQUET") or f["TABLA"]).strip().upper() == pedido]
+            if not catalogo:
+                raise SystemExit(
+                    f"El proceso {args.proceso!r} no esta entre los que entran "
+                    f"en una corrida {args.tipo_ejecucion!r}.\n"
+                    f"O no esta declarado en 'tablas', o su entrada en "
+                    f"'procesos' tiene estado=0 o el flag del dia en 0.")
+            logger.info("Corrida de UN SOLO proceso: %s", args.proceso)
         carpeta_dia = f"{cfg['output_dir']}/{fecha_proceso:%Y%m%d}"
 
         for fila in catalogo:
@@ -335,9 +608,23 @@ def main() -> int:
             try:
                 df = leer_origen(spark, args.jdbc_url, args.driver_class,
                                  bt_usuario, bt_clave, fila,
-                                 particiones.get(tabla), cfg.get("fetchsize", 10000))
+                                 fila.get("_PARTICION"), cfg.get("fetchsize", 10000))
 
-                df = aplicar_tipos(df, parsear_tipos(fila.get("TIPOS"), tabla), tabla)
+                # Orden de preferencia de los tipos: Variable > tabla destino
+                # > lo que infiera el driver. Ver tipos_de_destino().
+                mapa_tipos = parsear_tipos(fila.get("TIPOS"), tabla)
+                if mapa_tipos:
+                    logger.info("[%s] tipos declarados en la Variable: %s columna(s)",
+                                tabla, len(mapa_tipos))
+                elif str(cfg.get("tipos_desde_destino", True)).lower() not in ("false", "0", "no"):
+                    mapa_tipos = tipos_de_destino(conn_ctl, fila.get("TABLA_DESTINO", ""), tabla)
+                if not mapa_tipos:
+                    logger.warning(
+                        "[%s] sin tipos declarados ni deducibles: el parquet "
+                        "queda con lo que infiera el driver JDBC. Si la carga "
+                        "falla por tipos, declare 'tipos' para esta tabla en la "
+                        "Variable.", tabla)
+                df = aplicar_tipos(df, mapa_tipos, tabla)
 
                 # Las dos columnas propias, con el MISMO criterio que el
                 # pipeline de pandas: FECHA_PROCESO primera, BATCH_ID ultima.

@@ -18,7 +18,7 @@ from airflow.utils.context import Context
 
 from utils.spark_config import (
     SPARK_CONN_ID,
-    driver_for_conn_type,
+    driver_for_conn,
     jdbc_url,
     merge_conf,
     merge_csv_values,
@@ -189,7 +189,7 @@ class BsgSparkJdbcOperator(BsgSparkSubmitOperator):
             return super().execute(context)
 
         conn = BaseHook.get_connection(self.jdbc_conn_id)
-        driver = driver_for_conn_type(conn.conn_type)
+        driver = driver_for_conn(conn)
 
         app_args = list(self.application_args or [])
         ya_tiene_jdbc = (

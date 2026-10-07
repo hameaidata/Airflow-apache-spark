@@ -44,7 +44,7 @@ JDBC_DRIVERS: dict[str, JdbcDriver] = {
     # OJO: db2-jcc, mas abajo, es el de Db2 para LUW y z/OS. NO sirve contra
     # IBM i, aunque el nombre lo sugiera.
     "as400": JdbcDriver(
-        conn_types=("as400", "ibmi", "db2i","generic"),
+        conn_types=("as400", "ibmi", "db2i"),
         driver_class="com.ibm.as400.access.AS400JDBCDriver",
         jar=f"{JDBC_JARS_ROOT}/jt400.jar",
     ),
@@ -100,6 +100,87 @@ def spark_app_path(application: str) -> str:
     return posix_join(SPARK_APPS_ROOT, application.lstrip("/"))
 
 
+# Puertos que identifican un motor sin ambiguedad. 3306 queda FUERA a
+# proposito: lo usan MySQL y SingleStore por igual, y adivinar el motor por un
+# puerto compartido es exactamente el error que este modulo debe evitar.
+PUERTO_A_MOTOR: dict[int, str] = {
+    8471: "as400",   # IBM i, sin TLS
+    9471: "as400",   # IBM i, con TLS
+    446: "as400",    # DRDA
+    1433: "mssql",
+    5432: "postgres",
+    1521: "oracle",
+    50000: "db2",
+}
+
+
+def motor_de_conexion(conn) -> str:
+    """Devuelve el motor real de una Connection, resolviendo 'generic'.
+
+    POR QUE EXISTE ESTA FUNCION
+    ---------------------------
+    En Airflow, el tipo 'Generic' no dice nada del motor: es el tipo que se
+    elige cuando no hay un proveedor instalado para ese sistema. Si en el
+    proyecto hay DOS conexiones Generic -una al core IBM i y otra a SQL
+    Server-, cualquier regla que traduzca 'generic' a un motor fijo acierta en
+    una y se equivoca en la otra, en silencio: arma una URL jdbc:as400://
+    apuntando a SQL Server y carga el driver de IBM i para escribir en una
+    tabla de SQL Server. El error que sale de ahi no menciona el tipo de
+    conexion por ningun lado.
+
+    Asi que para una conexion Generic el motor hay que DECLARARLO, en el Extra:
+
+        {"motor": "as400"}     para el core Bantotal
+        {"motor": "mssql"}     para SQL Server
+
+    Si no esta declarado, se deduce del puerto cuando el puerto solo puede
+    pertenecer a un motor. Si tampoco, se falla diciendo que agregar y donde.
+    """
+    declarado = (conn.conn_type or "").strip().lower()
+    if declarado and declarado != "generic":
+        return declarado
+
+    extra = {}
+    try:
+        extra = conn.extra_dejson or {}
+    except Exception:                                            # noqa: BLE001
+        extra = {}
+
+    for clave in ("motor", "engine", "driver", "tipo"):
+        valor = str(extra.get(clave) or "").strip().lower()
+        if valor:
+            return valor
+
+    try:
+        puerto = int(conn.port) if conn.port else 0
+    except (TypeError, ValueError):
+        puerto = 0
+    if puerto in PUERTO_A_MOTOR:
+        return PUERTO_A_MOTOR[puerto]
+
+    # 'libraries' y 'naming' son propiedades que SOLO entiende el driver de
+    # IBM i, asi que su presencia es una declaracion de intencion.
+    if extra.get("libraries") or extra.get("naming"):
+        return "as400"
+
+    motores = sorted(JDBC_DRIVERS)
+    raise AirflowException(
+        f"La conexion '{getattr(conn, 'conn_id', '(sin id)')}' es de tipo Generic y no "
+        f"declara su motor, asi que no se puede saber que driver JDBC usar.\n"
+        f"Agregue el motor en el campo Extra de la conexion, en Admin > Connections:\n"
+        f'    {{"motor": "as400"}}   para el core Bantotal (IBM i)\n'
+        f'    {{"motor": "mssql"}}   para SQL Server\n'
+        f"Motores validos: {', '.join(motores)}.\n"
+        f"Alternativa: declarar el puerto, si identifica al motor sin ambiguedad "
+        f"({', '.join(str(p) for p in sorted(PUERTO_A_MOTOR))})."
+    )
+
+
+def driver_for_conn(conn) -> JdbcDriver:
+    """Driver JDBC de una Connection, resolviendo 'generic' por su Extra."""
+    return driver_for_conn_type(motor_de_conexion(conn))
+
+
 def driver_for_conn_type(conn_type: str) -> JdbcDriver:
     """Busca el driver JDBC asociado al conn_type de Airflow.
 
@@ -129,8 +210,8 @@ def driver_for_conn_type(conn_type: str) -> JdbcDriver:
 
 def jdbc_url(conn) -> str:
     """Construye la URL JDBC usando una Connection de Airflow."""
-    conn_type = (conn.conn_type or "").lower()
-    if conn_type in ("as400", "ibmi", "db2i","generic"):
+    conn_type = motor_de_conexion(conn)
+    if conn_type in ("as400", "ibmi", "db2i"):
         # Las propiedades NO son opcionales contra un core bancario:
         #   prompt=false              sin esto el driver intenta abrir un
         #                             dialogo grafico y la tarea se cuelga sin
@@ -154,6 +235,8 @@ def jdbc_url(conn) -> str:
         if extra.get("libraries"):
             propiedades.append(f"libraries={extra['libraries']}")
         return f"jdbc:as400://{conn.host}/{conn.schema or ''};" + ";".join(propiedades)
+    if conn_type in ("db2",):
+        return f"jdbc:db2://{conn.host}:{conn.port or 50000}/{conn.schema}"
     if conn_type in ("postgres", "postgresql"):
         return f"jdbc:postgresql://{conn.host}:{conn.port or 5432}/{conn.schema}"
     if conn_type in ("mssql", "odbc"):
@@ -169,7 +252,11 @@ def jdbc_url(conn) -> str:
         return f"jdbc:singlestore://{conn.host}:{conn.port or 3306}/{conn.schema}"
     if conn_type == "mysql":
         return f"jdbc:mysql://{conn.host}:{conn.port or 3306}/{conn.schema}"
-    raise AirflowException(f"No se como armar URL JDBC para conn_type='{conn.conn_type}'")
+    raise AirflowException(
+        f"No se como armar URL JDBC para el motor '{conn_type}' "
+        f"(conexion '{getattr(conn, 'conn_id', '(sin id)')}', tipo "
+        f"'{conn.conn_type}'). Motores con URL definida: as400, db2, mssql, "
+        f"postgres, oracle, singlestore, mysql, jdbc.")
 
 
 def merge_conf(*configs: Mapping[str, Any] | None, cores_max: int | str | None = None) -> dict[str, str]:

@@ -1,5 +1,5 @@
 """
-bt_odbc_test - comprobacion de conectividad ODBC contra Bantotal.
+LAB_BT_ODBC - comprobacion de conectividad ODBC contra Bantotal.
 
 QUE HACE
     Abre una conexion por el DSN de IBM i y pide la fecha del servidor. Nada
@@ -86,7 +86,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="bt_odbc_test",
+    dag_id="LAB_BT_ODBC",
     description="Comprobacion de conectividad ODBC contra Bantotal (diagnostico)",
     start_date=datetime(2025, 1, 1),
     schedule=None,
@@ -96,7 +96,7 @@ with DAG(
     dagrun_timeout=timedelta(minutes=5),
     max_active_runs=1,
     default_args=default_args,
-    tags=["manual", "diagnostico", "bantotal", "odbc"],
+    tags=["laboratorio", "manual", "utilidad", "diagnostico", "bantotal", "odbc"],
 ) as dag:
 
     PythonOperator(

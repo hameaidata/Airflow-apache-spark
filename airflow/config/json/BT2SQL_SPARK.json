@@ -1,16 +1,94 @@
 {
-  "_descripcion": "Variable del gemelo Spark de STG_BT2SQL_CARGA. Las claves son las mismas que BT2SQL_EXTRACCION y BT2SQL_CARGA, en dos secciones, para que los dos pipelines se puedan comparar clave a clave. Lo que cambia: output_dir (carpeta propia, para no pisar al de pandas), nom_proceso (para distinguirlos en la bitacora), sufijo_staging, y la seccion 'particiones'.",
+  "_descripcion": "Variable unica del pipeline STG_BT2SQL_CARGA_SPARK: Bantotal (IBM i) -> parquet -> STG en SQL Server. Todo lo configurable vive AQUI: los procesos, las tablas que se extraen y a que tabla sube cada una, los tamanos de lote y el paralelismo de lectura. Las dos unicas cosas que NO estan aqui son las credenciales (van en Admin > Connections) y el estado de cada corrida (va en las tablas de control).",
   "_sincronizar": "python scripts/sync_variables.py --solo BT2SQL_SPARK",
-  "_particiones": "DONDE SPARK GANA O NO GANA. Una tabla sin entrada aqui se lee con UNA sola conexion y Spark no aporta paralelismo: hace el mismo trabajo que pandas con la latencia de un cluster. El job lo avisa en el log. 'columna' debe ser NUMERICA y estar razonablemente repartida; si todas las filas caen en un rango, una particion hace todo el trabajo y las demas quedan vacias.",
+  "_la_doble_llave": "Una tabla entra en una corrida solo si esta en los DOS sitios de esta Variable: en 'tablas' con activo='S', y en 'extraccion.procesos' con estado=1 y el flag del calendario del dia en 1. El cruce es tablas.nombre_proceso == procesos.nombre_proceso y tablas.esquema == procesos.nombre_esquema. Si no coinciden, la tabla se extrae cero veces y el job lo dice con esos nombres.",
+  "_conexiones": "CONEXION_BANTOTAL y CONEXION_SQLSERVER son de tipo Generic en Airflow. Generic no identifica el motor, asi que CADA UNA debe declararlo en su campo Extra: {\"motor\": \"as400\"} la de Bantotal y {\"motor\": \"mssql\"} la de SQL Server. Sin eso no se puede saber que driver JDBC cargar y el job falla al arrancar diciendo exactamente esto.",
+  "_origen_tablas": "'variable' (lo normal): la lista 'tablas' de aqui manda y no se consulta CTL_PARAMETROS_PARQUET. 'catalogo': se ignora 'tablas' y se lee CTL_PARAMETROS_PARQUET con extraccion.sql_parametros_parquet, para los casos en que el catalogo lo mantenga otra area desde la base.",
+  "origen_tablas": "variable",
+  "_validacion_catalogo": "La Variable decide QUE se extrae; esta clave decide como se trata la DERIVA contra CTL_PARAMETROS_PARQUET de SQL Server, que es la otra lista y la mantiene gente distinta. 'estricto' (lo normal): una tabla declarada y no registrada en el catalogo corta la corrida, igual que un destino distinto entre las dos; una registrada y no declarada solo avisa. 'aviso': todo queda en WARNING y la corrida sigue. 'ninguna': no se compara, y la deriva deja de vigilarse.",
+  "validacion_catalogo": "estricto",
+  "_tablas": "LA LISTA QUE HAY QUE EDITAR PARA AGREGAR O QUITAR UNA TABLA. Cada entrada sirve a las dos mitades del pipeline: 'esquema'/'tabla'/'columnas'/'filtro'/'tipos' gobiernan la EXTRACCION, y 'tabla_destino'/'batch_size'/'commit_every' gobiernan la CARGA. columnas vacio = todas. filtro vacio = sin WHERE; cuidado con las historicas grandes. tipos manda sobre el esquema del parquet y evita que una columna que viene toda en NULL se infiera como tipo null y reviente a mitad de la escritura; formato COLUMNA:TIPO|COLUMNA:TIPO. particion = null significa UNA sola conexion de lectura: Spark no aporta nada ahi y el job lo avisa en el log; la columna tiene que ser NUMERICA y estar repartida, porque si todas las filas caen en un rango una particion hace todo el trabajo y las demas quedan vacias.",
+  "tablas": [
+    {
+      "nombre_proceso": "STG_FSH005",
+      "esquema": "GPPPBTDB",
+      "tabla": "FSH005",
+      "descripcion": "Tipo de cambio",
+      "activo": "S",
+      "columnas": "",
+      "filtro": "",
+      "tipos": "PGCOD:DECIMAL(3,0)|FSH005FEC:DECIMAL(8,0)|FSH005MON:DECIMAL(4,0)|FSH005TCV:DECIMAL(17,8)",
+      "tabla_destino": "STG_FSH005",
+      "batch_size": 5000,
+      "commit_every": 10,
+      "particion": {
+        "columna": "PGCOD",
+        "desde": 1,
+        "hasta": 999,
+        "particiones": 8
+      }
+    },
+    {
+      "nombre_proceso": "STG_MSFD008",
+      "esquema": "GPPPBTDB",
+      "tabla": "MSFD008",
+      "descripcion": "Maestro FD008",
+      "activo": "S",
+      "columnas": "",
+      "filtro": "",
+      "tipos": "",
+      "tabla_destino": "STG_MSFD008",
+      "batch_size": 5000,
+      "commit_every": 10,
+      "particion": null
+    },
+    {
+      "nombre_proceso": "STG_FSH031",
+      "esquema": "GPPPBTDB",
+      "tabla": "FSH031",
+      "descripcion": "Saldos diarios consolidados",
+      "activo": "S",
+      "columnas": "",
+      "filtro": "",
+      "tipos": "",
+      "tabla_destino": "STG_FSH031",
+      "batch_size": 5000,
+      "commit_every": 10,
+      "particion": null
+    },
+    {
+      "nombre_proceso": "STG_FSH012",
+      "esquema": "GPPPBTDB",
+      "tabla": "FSH012",
+      "descripcion": "Historico de saldos contables",
+      "activo": "S",
+      "columnas": "",
+      "filtro": "",
+      "tipos": "",
+      "tabla_destino": "STG_FSH012",
+      "batch_size": 5000,
+      "commit_every": 10,
+      "particion": null
+    }
+  ],
   "extraccion": {
     "output_dir": "/data/bt2sql/spark",
     "retencion_dias": 7,
     "sql_fecha": "SELECT PGFCIE FROM GPPPBTDB.FST017 FETCH FIRST 1 ROW ONLY",
     "tb_proceso_parquet": "ctl_proceso_parquet",
-    "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
+    "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS, TABLA_DESTINO, BATCH_SIZE FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
     "error_size_limit": 4000,
     "conn_id_origen": "CONEXION_BANTOTAL",
     "conn_id_destino": "CONEXION_SQLSERVER",
+    "nom_proceso": "SPARK_EXTRACCION_BANTOTAL",
+    "estado_ejecutando": "EJECUTANDO",
+    "estado_terminado": "TERMINADO",
+    "estado_sin_datos": "SIN_DATOS",
+    "estado_error": "ERROR",
+    "fetchsize": 10000,
+    "_tipos_desde_destino": "Cuando una tabla no declara 'tipos', deducirlos leyendo INFORMATION_SCHEMA.COLUMNS de su tabla_destino en SQL Server. El objetivo del casteo no es estetico: es que el parquet tenga los tipos que la tabla destino espera, porque si no coinciden el INSERT por JDBC falla -o peor, trunca sin fallar-. Y quien sabe esos tipos con certeza no es esta Variable ni el catalogo, es la propia tabla destino. Orden de preferencia: tablas[].tipos > tabla destino > lo que infiera el driver JDBC. En false se salta el paso 2 y se cae directo al 3.",
+    "tipos_desde_destino": true,
+    "archivos_por_tabla": 1,
     "procesos": [
       {
         "nombre_proceso": "STG_FSH005",
@@ -48,27 +126,14 @@
         "estado_semanal": 0,
         "estado_mensual": 0
       }
-    ],
-    "nom_proceso": "SPARK_EXTRACCION_BANTOTAL",
-    "estado_ejecutando": "EJECUTANDO",
-    "estado_terminado": "TERMINADO",
-    "estado_sin_datos": "SIN_DATOS",
-    "estado_error": "ERROR",
-    "fetchsize": 10000,
-    "archivos_por_tabla": 1,
-    "particiones": {
-      "FSH005": {
-        "columna": "PGCOD",
-        "desde": 1,
-        "hasta": 999,
-        "particiones": 8
-      }
-    }
+    ]
   },
   "carga": {
     "nom_proceso": "SPARK_PY_CARGA_BT2SQL_STG",
     "tabla_control": "ctl_carga_stg",
-    "sql_jobs": "SELECT p.archivo_parquet, e.tabla_destino, e.batch_size, p.commit_every FROM ctl_proceso_parquet p INNER JOIN CTL_PARAMETROS_PARQUET e ON p.tabla_origen = e.TABLA AND e.ESQUEMA = p.esquema AND e.ACTIVO = 'S' WHERE p.estado = 'TERMINADO' AND p.batch_id = {BATCH_ID} AND p.archivo_parquet IS NOT NULL ORDER BY p.id_log, e.TABLA",
+    "tabla_control_extraccion": "ctl_proceso_parquet",
+    "_sql_lotes": "Solo pregunta QUE dejo la extraccion de este batch: eso es estado de la corrida y vive en la tabla de control, no en la Variable. El destino y los tamanos salen de 'tablas', cruzando por esquema + tabla_origen. Antes habia un INNER JOIN contra CTL_PARAMETROS_PARQUET que descartaba en silencio cualquier tabla sin fila en el catalogo; ahora una tabla extraida que no este en 'tablas' es un ERROR, no una desaparicion.",
+    "sql_lotes": "SELECT p.id_log, p.archivo_parquet, p.esquema, p.tabla_origen FROM ctl_proceso_parquet p WHERE p.estado = 'TERMINADO' AND p.batch_id = {BATCH_ID} AND p.archivo_parquet IS NOT NULL ORDER BY p.id_log",
     "estado_iniciado": "INICIADO",
     "estado_ejecutado": "EJECUTADO",
     "estado_finalizado": "FINALIZADO",
@@ -78,7 +143,6 @@
     "batch_default": 5000,
     "usar_staging": true,
     "sufijo_staging": "_SPK",
-    "tabla_control_extraccion": "ctl_proceso_parquet",
     "conn_id_destino": "CONEXION_SQLSERVER"
   }
 }

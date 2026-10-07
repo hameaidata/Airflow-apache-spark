@@ -87,6 +87,19 @@ x-airflow-common: &airflow-common
     - ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
     # area compartida con el cluster de Spark (parquet, checkpoints)
     - spark_data:/opt/spark-data
+    # EL EVENT LOG DE SPARK, Y NO ES OPCIONAL.
+    # spark-defaults.conf -que se monta aqui mismo, mas arriba- trae
+    # spark.eventLog.enabled=true y spark.eventLog.dir=/opt/spark-events.
+    # En client mode el DRIVER corre dentro de ESTE contenedor, y el driver es
+    # quien escribe el event log. Sin este montaje, la carpeta no existe aqui y
+    # SparkContext muere al crearse:
+    #     java.io.FileNotFoundException: /opt/spark-events does not exist
+    # El sintoma enganaba: al escalar workers, el nuevo fallaba "por una carpeta
+    # que falta" mientras el cluster de Spark se veia perfecto -porque los
+    # servicios spark-* SI lo montaban y el de Airflow no-.
+    # De paso, montarlo hace que el History Server por fin vea los jobs que
+    # lanza Airflow; antes solo veia los que se enviaban desde el cluster.
+    - spark_events:/opt/spark-events
     # Logs en volumen nombrado: evita errores de permisos de NTFS.
     # Para leerlos: docker compose logs, o la UI de Airflow.
     - airflow_logs:/opt/airflow/logs

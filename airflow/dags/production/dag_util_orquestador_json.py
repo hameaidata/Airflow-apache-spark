@@ -1,5 +1,5 @@
 """
-ORQUESTADOR DIRIGIDO POR JSON
+UTIL_ORQUESTADOR_JSON - Orquestador dirigido por un manifiesto JSON
 
 Lee un manifiesto en formato JSON y construye el flujo a partir de el. Cada
 paso del manifiesto declara COMO debe ejecutarse:
@@ -144,7 +144,7 @@ default_args = {
 }
 
 with DAG(
-    dag_id="orquestador_json",
+    dag_id="UTIL_ORQUESTADOR_JSON",
     description=f"Orquestador dirigido por manifiesto: {MANIFIESTO.get('nombre', '?')}",
     default_args=default_args,
     start_date=datetime(2024, 1, 1),
@@ -156,7 +156,7 @@ with DAG(
     # protege cada tarea por separado, pero N tareas en serie pueden sumar
     # mucho mas. Este es el tope duro de la corrida completa.
     dagrun_timeout=timedelta(hours=12),
-    tags=["disparado", "produccion", "orquestador", "json"],
+    tags=["produccion", "disparado", "utilidad", "orquestador", "json"],
     doc_md=__doc__,
 ) as dag:
 

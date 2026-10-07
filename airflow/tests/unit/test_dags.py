@@ -39,9 +39,9 @@ RE_TASK_ID = re.compile(r"^[\w.-]+$")
 RE_GROUP_ID = re.compile(r"^[\w-]+$")
 
 DAGS_ESPERADOS = {
-    "BT_DATAHUB",
-    "etl_bt_parquet_singlestore",
-    "etl_bt_parquet_singlestore_spark",
+    "BDS_DATAHUB_PROCESOS",
+    "STG_BT_PARQUET",
+    "STG_BT2SQL_CARGA_SPARK",
 }
 
 
@@ -77,17 +77,17 @@ def test_dags_esperados_presentes(dagbag):
 
 
 def test_bt_datahub_no_quedo_en_modo_configuracion_invalida(dagbag):
-    """BT_DATAHUB publica una tarea 'configuracion_invalida' cuando el JSON esta mal.
+    """BDS_DATAHUB_PROCESOS publica una tarea 'configuracion_invalida' cuando el JSON esta mal.
 
     Eso es a proposito: mas vale un DAG visible que falla explicando el problema
     que un Broken DAG que desaparece de la lista. Pero como el archivo SI importa,
     test_ningun_dag_roto ya no atrapa un JSON mal escrito. Este test cubre ese
     hueco: en CI la configuracion tiene que armar el grafo de verdad.
     """
-    dag = dagbag.get_dag("BT_DATAHUB")
+    dag = dagbag.get_dag("BDS_DATAHUB_PROCESOS")
     tarea = dag.get_task("configuracion_invalida") if "configuracion_invalida" in dag.task_ids else None
     assert tarea is None, (
-        "BT_DATAHUB no pudo armar su grafo. Motivo:\n"
+        "BDS_DATAHUB_PROCESOS no pudo armar su grafo. Motivo:\n"
         + (dag.doc_md or "(sin doc_md)")
     )
 
@@ -144,7 +144,7 @@ from airflow.models import DagBag
 db = DagBag({str(DIR_DAGS)!r}, include_examples=False)
 rotos = [k for k in db.import_errors if "spark" in k]
 assert not rotos, db.import_errors
-assert "etl_bt_parquet_singlestore_spark" in db.dag_ids
+assert "STG_BT2SQL_CARGA_SPARK" in db.dag_ids
 """
     proc = subprocess.run([_sys.executable, "-c", guion], capture_output=True, text=True)
     assert proc.returncode == 0, (

@@ -109,6 +109,89 @@ def corchetes(*partes: str) -> str:
 # ============================================================================
 # BITACORA DE CARGA  (ctl_carga_stg)
 # ============================================================================
+def lotes_por_cargar(cfg: dict, conn, batch_id: str) -> list[dict]:
+    """Cruza lo que dejo la extraccion con el destino declarado en la Variable.
+
+    LA SEPARACION QUE HACE ESTA FUNCION
+    -----------------------------------
+    Hay dos cosas distintas y conviene no mezclarlas:
+
+      - QUE produjo la extraccion de ESTE batch: archivo_parquet, tabla_origen.
+        Es estado de la corrida. Vive en ctl_proceso_parquet y solo la base lo
+        sabe.
+      - A DONDE va cada tabla y con que tamanos: tabla_destino, batch_size,
+        commit_every. Es configuracion. Vive en la Variable.
+
+    Antes las dos salian de la misma consulta, con un INNER JOIN contra
+    CTL_PARAMETROS_PARQUET. Ese join tenia una consecuencia que no se ve
+    leyendolo: una tabla extraida sin fila en el catalogo desaparecia del
+    resultado y nadie se enteraba -el parquet quedaba escrito en disco y la
+    tabla destino con los datos del dia anterior-. Tanto es asi que el script
+    del catalogo trae una consulta especifica para detectar esa perdida.
+
+    Aqui una tabla extraida que no este declarada es un ERROR con nombre, no
+    una desaparicion.
+    """
+    sql = cfg["sql_lotes"].replace("{BATCH_ID}", f"'{batch_id}'")
+    if "{BATCH_ID}" in cfg["sql_lotes"] and batch_id not in sql:
+        raise SystemExit("No se pudo sustituir {BATCH_ID} en sql_lotes.")
+    producidos = filas_de(conn, sql)
+    if not producidos:
+        raise SystemExit(
+            f"No hay nada que cargar para el batch {batch_id}. "
+            f"Revise que la extraccion haya dejado filas en TERMINADO.")
+
+    if cfg.get("origen_tablas", "variable") != "variable":
+        # Con origen_tablas='catalogo' el destino lo pone la base: se espera
+        # que la consulta ya devuelva tabla_destino.
+        for fila in producidos:
+            if not fila.get("tabla_destino"):
+                raise SystemExit(
+                    f"origen_tablas='catalogo' pero la consulta no devolvio "
+                    f"tabla_destino para {fila.get('tabla_origen')}.")
+        return producidos
+
+    # Indice por (esquema, tabla), ambos normalizados: el core devuelve los
+    # nombres en mayusculas y una Variable escrita a mano casi nunca.
+    declaradas = {
+        (str(e["esquema"]).strip().upper(), str(e["tabla"]).strip().upper()): e
+        for e in (cfg.get("tablas") or [])
+    }
+
+    lotes, huerfanas = [], []
+    for fila in producidos:
+        clave = (str(fila["esquema"]).strip().upper(),
+                 str(fila["tabla_origen"]).strip().upper())
+        entrada = declaradas.get(clave)
+        if entrada is None:
+            huerfanas.append(f"{clave[0]}.{clave[1]}")
+            continue
+        destino = str(entrada.get("tabla_destino") or "").strip()
+        if not destino:
+            raise SystemExit(
+                f"La tabla {clave[0]}.{clave[1]} esta en 'tablas' pero sin "
+                f"'tabla_destino'. No se sabe donde cargarla.")
+        lotes.append({
+            "archivo_parquet": fila["archivo_parquet"],
+            "tabla_destino": destino,
+            "batch_size": int(entrada.get("batch_size") or cfg["batch_default"]),
+            "commit_every": int(entrada.get("commit_every") or cfg["commit_default"]),
+        })
+
+    if huerfanas:
+        raise SystemExit(
+            f"La extraccion dejo parquet de tabla(s) que no estan declaradas en "
+            f"'tablas' de la Variable: {', '.join(sorted(set(huerfanas)))}.\n"
+            f"Se corta aqui a proposito: cargar el resto y callar esto dejaria "
+            f"esas tablas destino con los datos del dia anterior y el parquet "
+            f"nuevo en disco sin que nadie lo note.\n"
+            f"Declarelas en airflow/config/json/BT2SQL_SPARK.json, o desactivelas "
+            f"en 'extraccion.procesos' para que no se extraigan.")
+
+    logger.info("%s archivo(s) por cargar, destino tomado de la VARIABLE", len(lotes))
+    return lotes
+
+
 def abrir_log(conn, cfg: dict, batch_id: str, ruta: str, destino: str) -> int:
     ejecutar(conn,
              f"INSERT INTO {cfg['tabla_control']} "
@@ -149,7 +232,10 @@ def main() -> int:
     args = p.parse_args()
 
     with open(args.config, encoding="utf-8") as fh:
-        cfg = json.load(fh)["carga"]
+        documento = json.load(fh)
+    cfg = documento["carga"]
+    cfg["tablas"] = documento.get("tablas", [])
+    cfg["origen_tablas"] = str(documento.get("origen_tablas", "variable")).strip().lower()
 
     usuario = os.environ.get("ORIGEN_USUARIO", "")
     clave = os.environ.get("ORIGEN_CLAVE", "")
@@ -170,15 +256,7 @@ def main() -> int:
 
     resultados, con_error = [], []
     try:
-        sql_jobs = cfg["sql_jobs"].replace("{BATCH_ID}", f"'{args.batch_id}'")
-        if "{BATCH_ID}" in cfg["sql_jobs"] and args.batch_id not in sql_jobs:
-            raise SystemExit("No se pudo sustituir {BATCH_ID} en sql_jobs.")
-        jobs = filas_de(conn, sql_jobs)
-        if not jobs:
-            raise SystemExit(
-                f"No hay nada que cargar para el batch {args.batch_id}. "
-                f"Revise que la extraccion haya dejado filas en TERMINADO.")
-        logger.info("%s archivo(s) por cargar", len(jobs))
+        jobs = lotes_por_cargar(cfg, conn, args.batch_id)
 
         for job in jobs:
             ruta = str(job["archivo_parquet"])
@@ -208,7 +286,7 @@ def main() -> int:
                 #    justo lo que el paso 1 evita.
                 (df.write
                    .mode("append")
-                   .option("batchsize", int(cfg["batch_default"]))
+                   .option("batchsize", int(job.get("batch_size") or cfg["batch_default"]))
                    .option("isolationLevel", "READ_COMMITTED")
                    .jdbc(args.jdbc_url, f"{esquema}.{tabla}{cfg['sufijo_staging']}",
                          properties=propiedades))
