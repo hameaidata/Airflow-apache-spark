@@ -44,7 +44,7 @@ JDBC_DRIVERS: dict[str, JdbcDriver] = {
     # OJO: db2-jcc, mas abajo, es el de Db2 para LUW y z/OS. NO sirve contra
     # IBM i, aunque el nombre lo sugiera.
     "as400": JdbcDriver(
-        conn_types=("as400", "ibmi", "db2i"),
+        conn_types=("as400", "ibmi", "db2i","generic"),
         driver_class="com.ibm.as400.access.AS400JDBCDriver",
         jar=f"{JDBC_JARS_ROOT}/jt400.jar",
     ),
@@ -130,7 +130,7 @@ def driver_for_conn_type(conn_type: str) -> JdbcDriver:
 def jdbc_url(conn) -> str:
     """Construye la URL JDBC usando una Connection de Airflow."""
     conn_type = (conn.conn_type or "").lower()
-    if conn_type in ("as400", "ibmi", "db2i"):
+    if conn_type in ("as400", "ibmi", "db2i","generic"):
         # Las propiedades NO son opcionales contra un core bancario:
         #   prompt=false              sin esto el driver intenta abrir un
         #                             dialogo grafico y la tarea se cuelga sin
