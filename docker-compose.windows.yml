@@ -330,10 +330,13 @@ services:
   spark-init:
     image: busybox:1.36
     container_name: spark-init
-    command: sh -c "mkdir -p /data /events && chmod -R 777 /data /events && echo 'permisos ajustados'"
+    command: sh -c "mkdir -p /data /events /fix/parquet /fix/s2sql /fix/bt2sql && chmod -R 777 /data /events && chmod 777 /fix/parquet  /fix/s2sql /fix/bt2sql && echo 'permisos ajustados'"
     volumes:
       - spark_data:/data
       - spark_events:/events
+      - ${PARQUET_HOST_DIR:-./data/parquet}:/fix/parquet
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:/fix/s2sql
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:/fix/bt2sql
     networks:
       - airflow-network
     restart: "no"
