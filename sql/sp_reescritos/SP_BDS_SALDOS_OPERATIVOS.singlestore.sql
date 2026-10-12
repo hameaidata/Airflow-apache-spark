@@ -350,17 +350,31 @@ BEGIN
 
     CREATE TEMPORARY TABLE TMP_SO_COMPLETO AS
     WITH LLAVES AS (
-        -- Cada (operacion, rubro) con el mes que hay que completar y sus
-        -- limites reales. Los limites importan: se completa el mes entero solo
-        -- DENTRO de la vida de la operacion en ese mes, no antes de que
-        -- existiera ni despues de que se cancelara.
+        -- LA LLAVE ES (ID_OPERACION_CIERRE, COD_RUBRO), Y LA REGLA ES:
+        -- si aparece AL MENOS UNA VEZ en un mes, ese mes se completa ENTERO.
+        --
+        -- O sea, de dia 1 a fin de mes, sin mirar en que dia del mes estaba su
+        -- primera ni su ultima fila. Una operacion que solo tuvo cierre el 17
+        -- de marzo sale con los 31 dias de marzo: el 17 con sus importes y los
+        -- otros 30 en cero.
+        --
+        -- Esto es lo que hace que el conteo por llave y mes sea CONSTANTE
+        -- -28, 29, 30 o 31 segun el mes-, que es la condicion que el promedio
+        -- acumulado necesita para dividir entre el numero correcto de dias.
+        --
+        -- Y la cara B de la misma regla: un mes donde la llave NO aparece
+        -- ninguna vez NO se crea. Una operacion con filas en abril y en junio
+        -- deja mayo vacio, no se arrastra. Arrastrarla obligaria a tener una
+        -- regla de cierre -vencimiento, estado, meses sin movimiento- y sin
+        -- ella una operacion cancelada reviviria para siempre.
+        --
+        -- La comprobacion 2 de VALIDAR_SALDOS_OPERATIVOS.sql verifica el
+        -- conteo exacto contra los dias del mes; no hay que creerselo.
         SELECT
             ID_OPERACION_CIERRE,
             COD_RUBRO,
             YEAR(FECHA_PROCESO)  AS ANIO,
-            MONTH(FECHA_PROCESO) AS MES,
-            MIN(FECHA_PROCESO)   AS PRIMERA_FECHA,
-            MAX(FECHA_PROCESO)   AS ULTIMA_FECHA
+            MONTH(FECHA_PROCESO) AS MES
         FROM TMP_SO_DIARIO
         GROUP BY ID_OPERACION_CIERRE, COD_RUBRO,
                  YEAR(FECHA_PROCESO), MONTH(FECHA_PROCESO)
@@ -374,9 +388,7 @@ BEGIN
             k.ANIO,
             k.MES,
             c.FEC_CALENDARIO AS FECHA_PROCESO,
-            c.IND_DIA_HABIL,
-            k.PRIMERA_FECHA,
-            k.ULTIMA_FECHA
+            c.IND_DIA_HABIL
         FROM LLAVES k
         -- DISTINCT y no la tabla directa: si BDS_CALENDARIOS trae una fila
         -- repetida para un dia -tipico de los feriados, que se cargan aparte-

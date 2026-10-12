@@ -93,7 +93,23 @@ WHERE FECHA_PROCESO >= @v_fecha_inicio_mes
 GROUP BY ID_OPERACION_CIERRE, COD_RUBRO,
          YEAR(FECHA_PROCESO), MONTH(FECHA_PROCESO)
 HAVING COUNT(*) <> DAY(LAST_DAY(MAX(FECHA_PROCESO)))
-   AND MAX(FECHA_PROCESO) <> @v_fecha_fin
+   -- La exencion del mes en curso solo vale si @v_fecha_fin NO es el ultimo
+   -- dia de su mes.
+   --
+   -- Antes era "AND MAX(FECHA_PROCESO) <> @v_fecha_fin" a secas, y eso tenia
+   -- un punto ciego en el caso MAS COMUN de todos: la corrida de cierre de
+   -- mes. Procesando hasta el 30 de abril, toda llave de abril tiene
+   -- MAX(FECHA_PROCESO) = @v_fecha_fin, asi que la exencion las excluia TODAS
+   -- y abril no se comprobaba. Una llave a la que le faltaran dias de abril
+   -- pasaba la validacion en silencio, que es justo lo contrario de lo que
+   -- esta comprobacion existe para hacer.
+   --
+   -- Con el LAST_DAY delante: si se proceso hasta fin de mes, ese mes esta
+   -- cerrado y se exige el conteo completo. Si se proceso a mitad de mes, se
+   -- exime, porque los dias que aun no han ocurrido no se inventan.
+   AND NOT (@v_fecha_fin <> LAST_DAY(@v_fecha_fin)
+            AND YEAR(MAX(FECHA_PROCESO))  = YEAR(@v_fecha_fin)
+            AND MONTH(MAX(FECHA_PROCESO)) = MONTH(@v_fecha_fin))
 ORDER BY COUNT(*) ASC
 LIMIT 50;
 
