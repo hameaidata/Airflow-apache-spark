@@ -83,6 +83,14 @@ x-airflow-common: &airflow-common
     # -sin ningun error- porque dentro del contenedor esa variable no existe.
     AIRFLOW_POOL_SINGLESTORE: ${AIRFLOW_POOL_SINGLESTORE:-default_pool}
     AIRFLOW_POOL_SQLSERVER: ${AIRFLOW_POOL_SQLSERVER:-default_pool}
+    AIRFLOW_POOL_SPARK: ${AIRFLOW_POOL_SPARK:-default_pool}
+    # --- Tamano del cluster de Spark -------------------------------------
+    # El DAG las lee para avisar cuando CORES_MAX de la Variable deja cores
+    # del cluster sin usar, que es el sintoma de "agregue un worker y no
+    # pasa nada". Sin pasarlas aqui, dentro del contenedor no existen y la
+    # comparacion se hace contra los valores por defecto.
+    SPARK_WORKER_REPLICAS: ${SPARK_WORKER_REPLICAS:-1}
+    SPARK_WORKER_CORES: ${SPARK_WORKER_CORES:-2}
     PYTHONUNBUFFERED: "1"
   volumes:
     - ./airflow/dags:/opt/airflow/dags:z
@@ -211,6 +219,19 @@ services:
         echo "==> Creando pools usados por los DAGs de ejemplo..."
         airflow pools set compute_pool 8  "Pool para tareas de transformacion" || true
         airflow pools set io_pool      4  "Pool para tareas de I/O a base de datos" || true
+        echo "==> Publicando Variables que falten (no pisa las existentes)..."
+        # --solo-nuevas y no una sincronizacion completa: un `docker compose up`
+        # que sobreescribiera las Variables borraria en silencio cualquier
+        # edicion hecha por la interfaz -incluido el arreglo de urgencia de las
+        # 2 de la madrugada-. Asi un stack nuevo queda configurado solo, y lo
+        # que ya existe se respeta.
+        #
+        # El fallo no corta el arranque: que falte una Variable es visible
+        # enseguida -el DAG lo dice en su primera tarea-, mientras que un
+        # Airflow que no levanta por esto es mucho peor de diagnosticar. Pero
+        # el fallo SI se registra, para que no pase por exito.
+        python /opt/airflow/scripts/sync_variables.py --solo-nuevas \
+          || echo "ADVERTENCIA: no se pudieron publicar las Variables. Revise con: sync_variables.py --dry-run"
         echo "==> Inicializacion completa."
     restart: on-failure
     depends_on:
@@ -371,7 +392,7 @@ services:
   # Bitnami hacia por debajo.
   # --------------------------------------------------------------------------
   spark-master:
-    image: ${SPARK_IMAGE:-docker.io/apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
+    image: ${SPARK_IMAGE:-docker.io/apache/spark:${SPARK_IMAGE_TAG:-3.5.3-scala2.12-java17-python3-ubuntu}}
     container_name: spark-master
     # Se sobrescribe el entrypoint de la imagen (pensado para Kubernetes) para
     # que el arranque sea determinista y no dependa de su modo pass-through.
@@ -433,7 +454,7 @@ services:
   #     http://localhost:18080
   # --------------------------------------------------------------------------
   spark-history:
-    image: ${SPARK_IMAGE:-apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
+    image: ${SPARK_IMAGE:-docker.io/apache/spark:${SPARK_IMAGE_TAG:-3.5.3-scala2.12-java17-python3-ubuntu}}
     container_name: spark-history
     entrypoint: ["/opt/spark/bin/spark-class"]
     command:
@@ -471,7 +492,7 @@ services:
   # entorno. Asi no dependemos de que la clase Worker las lea del entorno.
   # --------------------------------------------------------------------------
   spark-worker:
-    image: ${SPARK_IMAGE:-docker.io/apache/spark:${SPARK_IMAGE_TAG:-3.5.3}}
+    image: ${SPARK_IMAGE:-docker.io/apache/spark:${SPARK_IMAGE_TAG:-3.5.3-scala2.12-java17-python3-ubuntu}}
     deploy:
       replicas: ${SPARK_WORKER_REPLICAS:-1}
     entrypoint: ["/opt/spark/bin/spark-class"]
@@ -505,6 +526,12 @@ services:
     depends_on:
       spark-master:
         condition: service_healthy
+      # spark-init es quien deja escribibles los volumenes spark_data y
+      # spark_events. spark-master y spark-history ya dependian de el; el
+      # worker no, y es el que MAS los usa. Al escalar con --scale, un worker
+      # nuevo podia arrancar antes de que los permisos estuvieran puestos.
+      spark-init:
+        condition: service_completed_successfully
     networks:
       - airflow-network
     restart: unless-stopped

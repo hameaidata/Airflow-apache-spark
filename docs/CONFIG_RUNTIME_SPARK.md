@@ -94,7 +94,83 @@ tabla extraida sin fila en el catalogo **desaparecia del resultado** y nadie se
 enteraba — el parquet quedaba en disco y la tabla destino con los datos del dia
 anterior. Ahora una tabla extraida que no este declarada es un error con nombre.
 
-## El JSON puente y el control de publicacion
+## Los dos saltos de publicacion
+
+Lo que confunde a todo el mundo la primera vez es que **hay dos saltos, no
+uno**, y solo el segundo es automatico:
+
+```
+airflow/config/json/BT2SQL_SPARK.json      el repo, versionado en git
+         |
+         |  SALTO 1 - scripts/sync_variables.py
+         v
+Variable BT2SQL_SPARK                      metadata database de Airflow
+         |
+         |  SALTO 2 - tarea preparar_config, publicar_config: auto
+         v
+/opt/spark-data/runtime/bt2sql_spark.json  el volumen que lee Spark
+```
+
+Editar el JSON del repo no cambia nada por si solo: el scheduler lee la
+Variable, no el archivo. Y editar la Variable no cambia nada para el job hasta
+que `preparar_config` la copia al volumen.
+
+### El salto 1, y por que el arranque no lo hacia
+
+Antes `airflow-init` no tocaba Variables en absoluto -solo `db migrate`, el
+usuario admin, la connection `spark_default` y los pools-, asi que un stack
+nuevo arrancaba sin ninguna Variable y el primer `up` dejaba todos los DAGs
+fallando en su primera tarea.
+
+Ahora el init publica **las que falten**, y nada mas:
+
+```bash
+python /opt/airflow/scripts/sync_variables.py --solo-nuevas
+```
+
+`--solo-nuevas` no es una comodidad, es la unica forma segura de hacerlo en el
+arranque. Una sincronizacion completa ahi significaria que **cada
+`docker compose up` sobreescribe las Variables**, y con eso cualquier edicion
+hecha por la interfaz -incluido el arreglo de urgencia de las 2 de la
+madrugada- desaparece al siguiente reinicio, sin error y sin rastro. El sintoma
+seria "el cambio se deshizo solo", que es de los peores de diagnosticar.
+
+Entre las dos formas de equivocarse, esta bandera elige la que no pierde
+trabajo de nadie: arrancar sin una Variable se ve enseguida, porque el DAG lo
+dice en su primera tarea.
+
+**El precio, que conviene tener claro:** para las Variables que ya existen, el
+repo deja de ser la fuente de verdad en el arranque. La deriva no desaparece,
+solo deja de corregirse sola. Por eso el resumen cuenta las respetadas aparte y
+recuerda el comando para verlas. Y por eso el salto 1 **manual sigue siendo el
+camino normal** cuando se cambia algo:
+
+```bash
+# ver que cambiaria, sin tocar nada
+docker compose exec -T airflow-scheduler \
+    python /opt/airflow/scripts/sync_variables.py --solo BT2SQL_SPARK --dry-run
+
+# aplicarlo: el repo manda, se sobreescribe lo que haya
+docker compose exec -T airflow-scheduler \
+    python /opt/airflow/scripts/sync_variables.py --solo BT2SQL_SPARK
+```
+
+Dentro del contenedor y no desde Windows: `Variable.set` necesita hablar con la
+metadata database, y eso significa `AIRFLOW__DATABASE__SQL_ALCHEMY_CONN`, las
+credenciales de Postgres y `airflow` instalado en el Python de la maquina. El
+scheduler ya tiene las tres cosas.
+
+Editar por la interfaz tambien funciona y surte efecto inmediato. Pero entonces
+el repo queda obsoleto, y la proxima vez que alguien sincronice -o levante el
+stack en otra maquina- esa edicion se va. Lo que decide no es la tecnica, es a
+quien se le cree manana.
+
+El cableado de todo esto esta cubierto por
+`airflow/tests/unit/test_sync_variables.py`: que el init publique, que lo haga
+con `--solo-nuevas`, que vea la carpeta `scripts` montada, y que un fallo ahi no
+impida arrancar el stack.
+
+## El salto 2: el JSON puente y el control de publicacion
 
 Un job de Spark **no puede leer Variables de Airflow**: corre en otro
 contenedor, sin la base de metadatos y sin la libreria `airflow`. El puente es
@@ -157,7 +233,8 @@ borrarlos a mano cada tanto.
 ## Cambiar la configuracion, paso a paso
 
 1. Editar `airflow/config/json/BT2SQL_SPARK.json`.
-2. `python scripts/sync_variables.py --solo BT2SQL_SPARK`
+2. `docker compose exec -T airflow-scheduler python /opt/airflow/scripts/sync_variables.py --solo BT2SQL_SPARK`
+   (con `--dry-run` primero si hace tiempo que nadie compara las dos listas)
 3. Lanzar el DAG. Sin parametros.
 4. En el log de `preparar_config`, confirmar `CONFIGURACION PUBLICADA` con el
    hash nuevo. Si dice `SIN CAMBIOS`, el paso 2 no llego a la Variable.

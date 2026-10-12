@@ -42,9 +42,34 @@ from __future__ import annotations
 import logging
 import os
 import re
+import sys
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# etl_bt2sql/ vive junto a este archivo. Airflow pone dags/ en sys.path, pero
+# NO dags/production/, asi que sin esto `from etl_bt2sql...` falla al EJECUTAR
+# la tarea -no al parsear, porque esos imports estan dentro de las funciones-.
+# El sintoma es un DAG que aparece sano en la interfaz y revienta en su primera
+# tarea con ModuleNotFoundError.
+#
+# DOS DETALLES, Y LOS DOS ESTUVIERON MAL AQUI:
+#
+#   parents[0] y no parents[1]. Este archivo esta en dags/production/, asi que
+#   parents[0] es dags/production -donde esta etl_bt2sql- y parents[1] es
+#   dags/, que Airflow ya habia puesto. Agregar dags/ otra vez no agrega nada:
+#   el error seguia igual y la linea parecia estar haciendo su trabajo.
+#
+#   append y NO insert(0). Insertar al principio pone esta carpeta por delante
+#   de la biblioteca estandar, y el dia que alguien cree aqui un json.py o un
+#   logging.py se rompe el interprete entero. En este proyecto ya paso una vez,
+#   con una carpeta vacia plugins/logging/ que dejo a Airflow sin logging.
+#
+# Es el mismo bloque que dag_stg_bt2sql_carga.py y dag_exp_s2sql_carga.py; si
+# cambia aqui, tiene que cambiar en los tres.
+DIR_ACTUAL = str(Path(__file__).resolve().parent)
+if DIR_ACTUAL not in sys.path:
+    sys.path.append(DIR_ACTUAL)
 
 from airflow.exceptions import AirflowException
 from airflow.models.dag import DAG
@@ -89,25 +114,56 @@ def _conn_ids() -> tuple[str, str]:
     Esa primera tarea es verificar_origen_destino, que comprueba las dos
     conexiones por su nombre.
 
-    Se lee del archivo del volumen y NO de Variable.get() a proposito: esto
-    corre en cada pasada del parser, cada 30 segundos, y un Variable.get() ahi
-    es una consulta a la base de metadatos por DAG y por pasada.
-    """
-    try:
-        import json
+    PRIMERO EL ARCHIVO, DESPUES LA VARIABLE, Y SOLO AL FINAL LOS DEFECTOS
+    ---------------------------------------------------------------------
+    El archivo del volumen va primero porque leerlo es gratis y esto corre en
+    cada pasada del parser, cada 30 segundos: un Variable.get() ahi es una
+    consulta a la base de metadatos por DAG y por pasada.
 
+    Pero caer directo a los nombres por defecto cuando el archivo no existe
+    era un bug, y de los caros de diagnosticar. En una instalacion nueva nadie
+    ha publicado nada, asi que el DAG usaba 'CONEXION_BANTOTAL' sin importar lo
+    que dijera la Variable, y la primera tarea fallaba con
+    "The conn_id `CONEXION_BANTOTAL` isn't defined" mientras la Variable
+    declaraba otra cosa. El aviso del log decia "declarelas en la Variable y
+    publique", que es justo lo que ya estaba hecho.
+
+    Asi que entre medias se consulta la Variable. Esa consulta solo ocurre
+    mientras el archivo no exista -la ventana de arranque en frio, que es
+    exactamente cuando hace falta-; en cuanto preparar_config publica, el
+    camino vuelve a ser el archivo y no se toca la base nunca mas.
+    """
+    import json
+
+    try:
         doc = json.loads(Path(RUNTIME_JSON).read_text(encoding="utf-8"))
         ext = doc.get("extraccion", {})
         origen = str(ext.get("conn_id_origen") or "").strip() or CONN_ORIGEN_DEFECTO
         destino = str(ext.get("conn_id_destino") or "").strip() or CONN_DESTINO_DEFECTO
         return origen, destino
+    except FileNotFoundError:
+        pass
+    except Exception as exc:                                     # noqa: BLE001
+        logger.warning("%s existe pero no se pudo leer (%s); se prueba la "
+                       "Variable %s.", RUNTIME_JSON, exc, VARIABLE)
+
+    try:
+        from airflow.models import Variable
+
+        ext = (Variable.get(VARIABLE, deserialize_json=True) or {}).get("extraccion", {})
+        origen = str(ext.get("conn_id_origen") or "").strip() or CONN_ORIGEN_DEFECTO
+        destino = str(ext.get("conn_id_destino") or "").strip() or CONN_DESTINO_DEFECTO
+        logger.info(
+            "El JSON del volumen aun no existe: los conn_id salen de la "
+            "Variable %s (origen=%s, destino=%s).", VARIABLE, origen, destino)
+        return origen, destino
     except Exception as exc:                                     # noqa: BLE001
         logger.warning(
-            "No se pudieron leer los conn_id de %s (%s). Se usan los nombres "
-            "por defecto: %s y %s. Si sus Connections se llaman de otra forma, "
-            "declarelas en conn_id_origen y conn_id_destino de la Variable %s "
-            "y publique con publicar_config='si'.",
-            RUNTIME_JSON, exc, CONN_ORIGEN_DEFECTO, CONN_DESTINO_DEFECTO, VARIABLE)
+            "No se pudieron leer los conn_id ni de %s ni de la Variable %s "
+            "(%s). Se usan los nombres por defecto: %s y %s. Si sus "
+            "Connections se llaman de otra forma, declarelas en "
+            "conn_id_origen y conn_id_destino de esa Variable.",
+            RUNTIME_JSON, VARIABLE, exc, CONN_ORIGEN_DEFECTO, CONN_DESTINO_DEFECTO)
         return CONN_ORIGEN_DEFECTO, CONN_DESTINO_DEFECTO
 
 
@@ -253,12 +309,68 @@ def cargar_recursos() -> dict:
             VARIABLE_SPARK, exc, RECURSOS_DEFAULT)
         return dict(RECURSOS_DEFAULT)
 
-    recursos = {**RECURSOS_DEFAULT, **{k: v for k, v in config.items()
-                                       if k in RECURSOS_DEFAULT}}
-    if recursos == RECURSOS_DEFAULT:
+    # Las claves viven BAJO "RECURSOS", no en la raiz, y eso era un bug:
+    # esta funcion recorria config.items() -la raiz- donde las claves son
+    # _DESCRIPCION, _ADVERTENCIA, RECURSOS, CONF... ninguna coincide con
+    # EXECUTOR_MEMORY ni con las demas. Resultado: la Variable estaba
+    # perfectamente puesta y el bloque RECURSOS no se leia NUNCA. El job
+    # corria siempre con los valores de RECURSOS_DEFAULT, y el WARNING de
+    # abajo acusaba a la Variable de no definir lo que si definia.
+    #
+    # Se acepta tambien la forma plana por compatibilidad: si alguien tiene la
+    # Variable con las claves en la raiz, sigue funcionando.
+    declarados = config.get("RECURSOS")
+    if not isinstance(declarados, dict):
+        declarados = config
+
+    encontrados = {k: v for k, v in declarados.items() if k in RECURSOS_DEFAULT}
+    recursos = {**RECURSOS_DEFAULT, **encontrados}
+
+    # El aviso se decide por lo que SE ENCONTRO, no comparando el resultado
+    # con los defaults, y la diferencia no es cosmetica: los valores del
+    # archivo del repositorio coinciden hoy, uno por uno, con
+    # RECURSOS_DEFAULT -los dos estan dimensionados para un worker de 2
+    # cores-. Comparando valores, una Variable perfectamente puesta producia
+    # el aviso "no define ninguno de ...", que es exactamente lo contrario de
+    # lo que pasaba. Dos bugs apilados daban el mismo sintoma y el segundo
+    # quedaba tapado por el primero.
+    if not encontrados:
         logger.warning(
             "%s no define ninguno de %s. El job correra con UN executor.",
             VARIABLE_SPARK, ", ".join(RECURSOS_DEFAULT))
+    else:
+        faltan = [k for k in RECURSOS_DEFAULT if k not in encontrados]
+        logger.info("Recursos de %s: %s%s", VARIABLE_SPARK, recursos,
+                    f" (por defecto: {', '.join(faltan)})" if faltan else "")
+
+    # AVISO DE ESCALADO. Este es el que explica el "agregue un worker y no
+    # pasa nada": CORES_MAX es un techo de la APLICACION, no del cluster. Con
+    # CORES_MAX=2, da igual que haya tres workers de 2 cores cada uno: el
+    # master solo le asigna 2 cores al job y los otros cuatro se quedan
+    # mirando. El worker nuevo aparece sano en la interfaz del master, y eso
+    # es justo lo que despista.
+    #
+    # La capacidad se lee del entorno y no del cluster a proposito: consultar
+    # la API del master en cada pasada del parser seria una llamada de red
+    # cada 30 segundos por DAG.
+    try:
+        capacidad = (int(os.environ.get("SPARK_WORKER_REPLICAS", 1))
+                     * int(os.environ.get("SPARK_WORKER_CORES", 2)))
+        if int(recursos["CORES_MAX"]) < capacidad:
+            logger.warning(
+                "El cluster anuncia %s cores (SPARK_WORKER_REPLICAS x "
+                "SPARK_WORKER_CORES) pero CORES_MAX de %s es %s: el job NO "
+                "usara los %s cores de diferencia, y los workers de sobra "
+                "quedaran inactivos aunque se vean sanos en la interfaz del "
+                "master. Al escalar workers hay que subir CORES_MAX y "
+                "NUM_EXECUTORS en esa Variable; la tabla de escalado esta en "
+                "su propio _ADVERTENCIA.",
+                capacidad, VARIABLE_SPARK, recursos["CORES_MAX"],
+                capacidad - int(recursos["CORES_MAX"]))
+    except (TypeError, ValueError) as exc:                      # noqa: BLE001
+        logger.warning("No se pudo comparar CORES_MAX con la capacidad del "
+                       "cluster: %s", exc)
+
     return recursos
 
 
@@ -299,6 +411,61 @@ SPARK_CONF = {
 # contenedor, y -con spark.eventLog.enabled activo- queda escrito en disco
 # para que lo lea el History Server.
 # ============================================================================
+def _clase_operador_spark():
+    """Devuelve BsgSparkJdbcOperator sin depender del nombre `operators`.
+
+    POR QUE NO BASTA EL IMPORT NORMAL
+    ---------------------------------
+    Airflow ANADE `plugins/` AL FINAL de sys.path, no al principio. Asi que
+    cualquier paquete instalado -o cualquier carpeta que entre antes en la
+    ruta- que se llame `operators` gana la resolucion del nombre, y el import
+    falla con `No module named 'operators.spark_operator'` mientras el archivo
+    sigue intacto en su sitio. Es el Broken DAG mas desconcertante del
+    proyecto: el mensaje senala un modulo que existe.
+
+    Peor todavia: basta con que ALGUIEN haya importado antes un `operators`
+    ajeno para que quede en sys.modules, y entonces el nuestro ya no se puede
+    alcanzar por nombre en ese proceso.
+
+    De ahi el segundo camino: cargar el archivo por su RUTA ABSOLUTA, que no
+    pasa por la resolucion de nombres y por tanto no se puede tapar. La ruta se
+    deriva de la ubicacion de este propio archivo y no se escribe fija, para
+    que valga igual dentro del contenedor (/opt/airflow/dags/production) que en
+    el repositorio.
+    """
+    try:
+        from operators.spark_operator import BsgSparkJdbcOperator
+        return BsgSparkJdbcOperator
+    except ImportError:
+        pass
+
+    import importlib.util
+
+    # .../airflow/dags/production/este_archivo.py -> .../airflow/plugins/...
+    ruta = (Path(__file__).resolve().parents[2]
+            / "plugins" / "operators" / "spark_operator.py")
+    if not ruta.is_file():
+        raise ImportError(
+            f"No se pudo importar operators.spark_operator por nombre -algo mas "
+            f"ocupa el nombre 'operators'- y tampoco esta en {ruta}. "
+            f"Compruebe que airflow/plugins/operators/spark_operator.py existe "
+            f"y que plugins/ esta montado en el contenedor."
+        )
+
+    # Nombre propio en sys.modules: si usaramos 'operators.spark_operator'
+    # estariamos peleando por el mismo nombre que acabamos de perder.
+    spec = importlib.util.spec_from_file_location(
+        "_bsg_spark_operator_por_ruta", ruta)
+    modulo = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, modulo)
+    spec.loader.exec_module(modulo)
+    logger.warning(
+        "operators.spark_operator se cargo por ruta (%s) porque el nombre "
+        "'operators' esta ocupado por otro paquete. El DAG funciona, pero "
+        "conviene averiguar quien lo ocupa.", ruta)
+    return modulo.BsgSparkJdbcOperator
+
+
 def _operador_spark(**kwargs):
     """Importa el plugin DENTRO de la funcion.
 
@@ -306,8 +473,7 @@ def _operador_spark(**kwargs):
     pasada del parser, y si el plugin falla se cae el archivo entero con un
     Broken DAG en vez de fallar solo la tarea.
     """
-    from operators.spark_operator import BsgSparkJdbcOperator
-    return BsgSparkJdbcOperator(**kwargs)
+    return _clase_operador_spark()(**kwargs)
 
 
 class _SparkDosConexiones:
@@ -316,8 +482,13 @@ class _SparkDosConexiones:
     @staticmethod
     def crear(**kwargs):
         from airflow.hooks.base import BaseHook
-        from operators.spark_operator import BsgSparkJdbcOperator
-        from utils.spark_config import driver_for_conn, jdbc_url
+        from utils.spark_config import (
+            driver_for_conn,
+            jdbc_url,
+            merge_csv_values,
+        )
+
+        BsgSparkJdbcOperator = _clase_operador_spark()
 
         class ConDestino(BsgSparkJdbcOperator):
             #: nombre_proceso de esta tarea; None = corrida de todo el catalogo
@@ -342,10 +513,31 @@ class _SparkDosConexiones:
                             f"{self.proceso_de_la_tarea}: {motivo}")
 
                 conn = BaseHook.get_connection(CONN_DESTINO)
+                driver_destino = driver_for_conn(conn)
+
+                # EL JAR DEL DESTINO TAMBIEN, no solo su clase.
+                #
+                # Esto faltaba y era un bug latente. El job de extraccion abre
+                # DOS conexiones con abrir_jdbc: la del origen -cuyo jar lo
+                # agrega el operador a partir de jdbc_conn_id- y la del control
+                # en SQL Server, cuya clase llega por DESTINO_DRIVER_CLASS.
+                # Pero la CLASE sin el JAR no sirve: jvm.Class.forName falla con
+                # ClassNotFoundException.
+                #
+                # Hoy no se notaba porque en las pruebas origen y destino son el
+                # mismo motor, asi que el jar del origen ya traia el driver de
+                # SQL Server. En produccion -origen AS400, control SQL Server-
+                # habria fallado en la primera conexion de control.
+                #
+                # Se agrega a self.jars y no al classpath directamente para que
+                # lo recoja el operador, que es quien decide como se arma el
+                # extraClassPath del driver. Un solo sitio que lo decide.
+                self.jars = merge_csv_values(self.jars, driver_destino.jar)
+
                 self.env_vars = {
                     **dict(self.env_vars or {}),
                     "DESTINO_JDBC_URL": jdbc_url(conn),
-                    "DESTINO_DRIVER_CLASS": driver_for_conn(conn).driver_class,
+                    "DESTINO_DRIVER_CLASS": driver_destino.driver_class,
                     "DESTINO_USUARIO": conn.login,
                     "DESTINO_CLAVE": conn.password,
                 }
@@ -573,9 +765,63 @@ def _config_publicada() -> dict:
     ruta = Path(RUNTIME_JSON)
     if not ruta.exists():
         raise AirflowException(
-            f"{RUNTIME_JSON} no existe. Lance el DAG con publicar_config='si' "
-            f"una vez para publicar la configuracion.")
+            f"{RUNTIME_JSON} no existe, y esta tarea corre DESPUES de "
+            f"preparar_config, que es quien lo escribe. Asi que si falta aqui, "
+            f"preparar_config no lo publico: mire su log.\n"
+            f"Lo mas probable es que se lanzara con publicar_config='no' sin "
+            f"haber publicado nunca antes. Relance con publicar_config='si'.")
     return json.loads(ruta.read_text(encoding="utf-8"))
+
+
+def _config_para_compuerta() -> tuple[dict, str]:
+    """La configuracion para la compuerta cero, que corre ANTES de publicar.
+
+    POR QUE ESTA NO PUEDE EXIGIR EL JSON PUBLICADO
+    ----------------------------------------------
+    verificar_origen_destino es la PRIMERA tarea del grafo y preparar_config,
+    que escribe el JSON del volumen, es la SEGUNDA. Usando _config_publicada
+    aqui, en una instalacion nueva el DAG no arrancaba nunca: la tarea 1 exigia
+    el archivo que crea la tarea 2, y el mensaje de error recomendaba
+    publicar_config='si', un parametro que consume justamente la tarea que
+    nunca llegaba a ejecutarse. Un circulo cerrado.
+
+    Asi que aqui se prefiere el JSON publicado -para que en regimen normal la
+    compuerta compruebe exactamente las tablas de control que Spark va a usar-
+    y se cae a la Variable cuando no existe todavia. Es el mismo criterio con
+    el que se dibuja el grafo al parsear, y la divergencia no es un riesgo
+    real: si no hay JSON publicado, preparar_config lo va a escribir desde
+    esta misma Variable en el paso siguiente.
+
+    Devuelve (documento, de_donde_salio) para que el log lo diga.
+    """
+    import json
+
+    try:
+        doc = json.loads(Path(RUNTIME_JSON).read_text(encoding="utf-8"))
+        return doc, "el JSON publicado"
+    except FileNotFoundError:
+        pass
+    except Exception as exc:                                     # noqa: BLE001
+        logger.warning("%s existe pero no se pudo leer (%s); se usa la "
+                       "Variable %s.", RUNTIME_JSON, exc, VARIABLE)
+
+    from airflow.models import Variable
+
+    try:
+        doc = Variable.get(VARIABLE, deserialize_json=True)
+    except Exception as exc:                                     # noqa: BLE001
+        raise AirflowException(
+            f"No hay configuracion por ningun lado: {RUNTIME_JSON} no existe y "
+            f"la Variable {VARIABLE} no se pudo leer ({exc}).\n"
+            f"Publiquela con:\n"
+            f"    docker compose exec -T airflow-scheduler python "
+            f"/opt/airflow/scripts/sync_variables.py --solo {VARIABLE}"
+        ) from exc
+
+    logger.info(
+        "El JSON del volumen aun no existe: la compuerta usa la Variable %s. "
+        "preparar_config lo publicara en el paso siguiente.", VARIABLE)
+    return doc, f"la Variable {VARIABLE}"
 
 
 def _clave(esquema, tabla) -> tuple[str, str]:
@@ -603,7 +849,8 @@ def verificar_origen_destino() -> dict:
 
     from etl_bt2sql.bt2sql_comun import conexion_bantotal, conexion_sqlserver
 
-    doc = _config_publicada()
+    doc, de_donde = _config_para_compuerta()
+    logger.info("Compuerta cero, configuracion leida de %s", de_donde)
     ext, car = doc["extraccion"], doc["carga"]
     resultado = {}
 
@@ -611,14 +858,49 @@ def verificar_origen_destino() -> dict:
     # Se usa sql_fecha, que es la consulta mas barata que ya existe y que el
     # job necesita de todas formas. Si responde, el core esta arriba, la
     # credencial sirve y la biblioteca del Extra resuelve.
+    # EL CONECTOR SE ELIGE POR EL MOTOR DECLARADO, NO POR EL NOMBRE DE LA TAREA.
+    #
+    # conexion_bantotal fija en el codigo "jdbc:as400://", el driver de JTOpen y
+    # su jar: ignora por completo lo que sea la Connection. Mientras el origen
+    # fuera siempre el IBM i eso daba igual, pero con conn_id_origen apuntando a
+    # SQL Server -que es como se prueba el pipeline sin el core a mano- armaba
+    # "jdbc:as400://host:1433" y cargaba el driver de IBM i contra SQL Server.
+    # El fallo que sale de ahi no menciona ni el motor ni el driver.
+    #
+    # motor_de_conexion resuelve el 'generic' de Airflow mirando el Extra, el
+    # puerto y las bibliotecas; es la misma funcion que usa el operador de Spark
+    # para decidir el driver, asi que la compuerta comprueba el origen con
+    # EXACTAMENTE el motor con el que lo va a leer el job.
+    from airflow.hooks.base import BaseHook
+    from utils.spark_config import motor_de_conexion
+
     try:
-        conn = conexion_bantotal({"conn_id_origen": CONN_ORIGEN})
+        motor_origen = motor_de_conexion(BaseHook.get_connection(CONN_ORIGEN))
     except Exception as exc:                                     # noqa: BLE001
         raise AirflowException(
-            f"No se pudo conectar al core con la Connection {CONN_ORIGEN!r}: {exc}\n"
-            f"Revise en Admin > Connections: host, puerto, usuario, clave, y que "
-            f"el Extra declare el motor y la biblioteca, "
-            f'por ejemplo {{"motor": "as400", "libraries": "GPPPBTDB"}}.') from exc
+            f"No se pudo resolver el motor de la Connection {CONN_ORIGEN!r} "
+            f"(origen): {exc}\n"
+            f"Si es de tipo Generic, declarelo en el Extra, "
+            f'por ejemplo {{"motor": "as400", "libraries": "GPPPBTDB"}} para '
+            f'Bantotal o {{"motor": "mssql"}} para SQL Server.') from exc
+
+    abrir_origen = (conexion_sqlserver if motor_origen in ("mssql", "odbc")
+                    else conexion_bantotal)
+    clave_origen = ("conn_id_destino" if abrir_origen is conexion_sqlserver
+                    else "conn_id_origen")
+    logger.info("ORIGEN   %-22s motor %s, se abre con %s",
+                CONN_ORIGEN, motor_origen, abrir_origen.__name__)
+
+    try:
+        conn = abrir_origen({clave_origen: CONN_ORIGEN})
+    except Exception as exc:                                     # noqa: BLE001
+        raise AirflowException(
+            f"No se pudo conectar al origen con la Connection {CONN_ORIGEN!r} "
+            f"(motor {motor_origen}): {exc}\n"
+            f"Revise en Admin > Connections: host, puerto, usuario, clave, y el "
+            f"campo Extra. Para Bantotal, "
+            f'{{"motor": "as400", "libraries": "GPPPBTDB"}}; para SQL Server, '
+            f'{{"motor": "mssql"}}.') from exc
     try:
         cur = conn.cursor()
         cur.execute(ext["sql_fecha"])
@@ -629,7 +911,8 @@ def verificar_origen_destino() -> dict:
                 f"Sin fecha de proceso del core no se puede nombrar la carpeta "
                 f"del dia ni registrar la bitacora.")
         resultado["fecha_core"] = str(fila[0]).strip().split(".")[0]
-        logger.info("ORIGEN   %-22s OK   fecha de proceso del core: %s",
+        resultado["motor_origen"] = motor_origen
+        logger.info("ORIGEN   %-22s OK   fecha de proceso: %s",
                     CONN_ORIGEN, resultado["fecha_core"])
     finally:
         conn.close()
@@ -923,7 +1206,18 @@ def validar_catalogo() -> dict:
     try:
         cur = conn.cursor()
         cur.execute(doc["extraccion"]["sql_parametros_parquet"])
-        columnas = [d[0].upper() for d in cur.description]
+        # str() alrededor de d[0] NO es defensivo de adorno: jaydebeapi, que
+        # habla con el driver JDBC por JPype, devuelve los nombres de columna
+        # como java.lang.String, y ese objeto NO tiene .upper() ni .lower().
+        # El error que sale es
+        #     AttributeError: 'java.lang.String' object has no attribute 'upper'
+        # y no menciona ni JDBC ni JPype, asi que no se parece a su causa.
+        #
+        # El resto del archivo ya envuelve en str() todo lo que viene del
+        # cursor -_clave() hace str(esquema or "").strip().upper()-; estas dos
+        # lineas eran la excepcion. El job de Spark no tiene el problema porque
+        # pasa por py4j (spark._jvm), que si convierte a str de Python.
+        columnas = [str(d[0]).upper() for d in cur.description]
         catalogo = {}
         for fila in cur.fetchall():
             r = dict(zip(columnas, fila))
@@ -1015,7 +1309,18 @@ def verificar_parquet(batch_id: str | None = None) -> bool:
     try:
         cur = conn.cursor()
         cur.execute(config["sql_lotes"].replace("{BATCH_ID}", "?"), (batch,))
-        columnas = [d[0].lower() for d in cur.description]
+        # str() alrededor de d[0] NO es defensivo de adorno: jaydebeapi, que
+        # habla con el driver JDBC por JPype, devuelve los nombres de columna
+        # como java.lang.String, y ese objeto NO tiene .upper() ni .lower().
+        # El error que sale es
+        #     AttributeError: 'java.lang.String' object has no attribute 'upper'
+        # y no menciona ni JDBC ni JPype, asi que no se parece a su causa.
+        #
+        # El resto del archivo ya envuelve en str() todo lo que viene del
+        # cursor -_clave() hace str(esquema or "").strip().upper()-; estas dos
+        # lineas eran la excepcion. El job de Spark no tiene el problema porque
+        # pasa por py4j (spark._jvm), que si convierte a str de Python.
+        columnas = [str(d[0]).lower() for d in cur.description]
         jobs = [dict(zip(columnas, f)) for f in cur.fetchall()]
     finally:
         conn.close()
@@ -1072,7 +1377,7 @@ def limpiar_parquet() -> dict:
         return {"borradas": 0}
 
     corte = datetime.now().date() - timedelta(days=dias)
-    borradas = []
+    borradas, fallidas = [], []
     for carpeta in sorted(raiz.iterdir()):
         if not carpeta.is_dir() or not (len(carpeta.name) == 8 and carpeta.name.isdigit()):
             continue
@@ -1081,11 +1386,43 @@ def limpiar_parquet() -> dict:
         except ValueError:
             continue
         if fecha < corte:
-            shutil.rmtree(carpeta, ignore_errors=True)
+            # ignore_errors=True era un agujero: se comia cualquier error y el
+            # nombre se agregaba igual, asi que el log decia "borradas: 3" con
+            # las tres carpetas intactas. La retencion dejaba de funcionar en
+            # silencio y el disco crecia durante meses.
+            #
+            # Y el borrado SI puede fallar aqui: esta tarea corre en
+            # airflow-worker (uid 50000) y tiene que borrar archivos que
+            # escribieron los executors (uid 185). Depende de los permisos de
+            # las carpetas, que es lo mismo de lo que depende la escritura.
+            try:
+                shutil.rmtree(carpeta)
+            except OSError as exc:
+                fallidas.append(f"{carpeta.name} ({exc})")
+                continue
+            if carpeta.exists():
+                fallidas.append(f"{carpeta.name} (sigue existiendo tras rmtree)")
+                continue
             borradas.append(carpeta.name)
 
     logger.info("retencion %s dias: %s carpeta(s) borradas %s",
                 dias, len(borradas), borradas or "")
+
+    # Falla en rojo, y a proposito. Esta es la ultima tarea de la cadena, asi
+    # que un rojo aqui dice "los datos se cargaron, la limpieza no" -que es
+    # exacto y accionable-. La alternativa, un WARNING, es como estaba: nadie
+    # lo lee y el disco se llena callado.
+    if fallidas:
+        raise AirflowException(
+            f"No se pudieron borrar {len(fallidas)} carpeta(s) de mas de "
+            f"{dias} dias en {raiz}:\n  " + "\n  ".join(fallidas) + "\n\n"
+            f"La carga SI termino; lo que fallo es la retencion. Lo normal es "
+            f"un choque de permisos: esta tarea corre como uid 50000 y los "
+            f"archivos los escriben los executors como uid 185. Compruebe que "
+            f"spark.hadoop.fs.permissions.umask-mode sigue en 000 en "
+            f"spark/config/spark-defaults.conf, y los permisos con:\n"
+            f"    ls -la {raiz}")
+
     return {"borradas": len(borradas), "carpetas": borradas}
 
 
@@ -1247,6 +1584,22 @@ with DAG(
         for prioridad in sorted(niveles):
             etiqueta = (f"prioridad_{prioridad}" if prioridad != 99
                         else "sin_prioridad_declarada")
+            # Los niveles posteriores al primero van con all_done, no con la
+            # regla por defecto (all_success). El encadenamiento por prioridad
+            # expresa ORDEN, no condicion: "prioridad 2 despues de prioridad
+            # 1", no "prioridad 2 solo si prioridad 1 salio bien".
+            #
+            # Con all_success, una sola tabla de prioridad 1 saltada por
+            # calendario -que es el funcionamiento normal de casi cualquier
+            # dia- marcaba en skipped TODAS las de prioridad 2 sin ejecutarlas,
+            # con duracion cero. Hoy no se nota porque las tablas de prioridad
+            # 2 estan en activo "N"; en produccion, con todas activas, seria
+            # perdida de datos silenciosa: tablas que nadie extrajo y ninguna
+            # tarea en rojo que lo diga.
+            #
+            # all_done es tambien la regla que ya usa extraccion_completa, y
+            # por el mismo motivo.
+            es_primer_nivel = grupo_anterior is None
             with TaskGroup(
                 group_id=etiqueta,
                 tooltip=(f"{len(niveles[prioridad])} proceso(s) de prioridad "
@@ -1255,6 +1608,8 @@ with DAG(
                 for entrada in niveles[prioridad]:
                     tarea = _SparkDosConexiones.crear(
                         task_id=_slug(entrada["proceso"]),
+                        trigger_rule=("all_success" if es_primer_nivel
+                                      else "all_done"),
                         proceso_de_la_tarea=entrada["proceso"],
                         jdbc_conn_id=CONN_ORIGEN,
                         application=f"{APPS}/bt2sql_extraccion_spark.py",
@@ -1304,8 +1659,37 @@ with DAG(
             "si hay algo que cargar es `verificar_parquet`, que mira el disco."
         ),
     )
+    # EL ABANICO CUELGA DE TODAS LAS TAREAS, NO DE LAS HOJAS DEL GRUPO
+    #
+    # "grupo_extraccion >> tarea_extraccion_completa" parece equivalente y no
+    # lo es: Airflow conecta un TaskGroup por sus HOJAS, y como los niveles de
+    # prioridad van encadenados entre si, las hojas del grupo son solo las
+    # tareas del ULTIMO nivel. Las de prioridad 1 quedaban FUERA de la lista de
+    # espera de este punto de union, y solo llegaban a el de forma transitiva,
+    # a traves de prioridad 2.
+    #
+    # Lo que eso provoco, corrida manual__2026-10-11T21:41:56:
+    #   21:42:22.773  stg_msfd008 (prioridad 1) se SALTA: su tabla esta en "N"
+    #   21:42:22.905  stg_fsh012 y stg_fsh031 (prioridad 2) quedan en skipped
+    #                 con duracion CERO. Es propagacion de skip: con la regla
+    #                 por defecto (all_success) un solo upstream saltado ya
+    #                 decide el resultado, y el scheduler no espera a los demas
+    #   21:42:23.662  extraccion_completa ve TODOS sus upstream en estado
+    #                 terminal y, con all_done, se da por satisfecha
+    #   21:42:26      verificar_parquet consulta la bitacora: la fila de FSH005
+    #                 existe, pero en EJECUTANDO y no en TERMINADO, asi que
+    #                 devuelve False y la carga queda en skipped
+    #   21:43:03.623  stg_fsh005 termina y escribe TERMINADO. Ya no hay nadie
+    #                 esperandolo
+    #
+    # Resultado: parquet correcto en disco, STG vacia, y NI UNA TAREA EN ROJO.
+    # Esa es la parte peligrosa: el fallo era invisible en la interfaz.
+    #
+    # El abanico explicito hace que el punto de union espere a cada tarea de
+    # extraccion, pase lo que pase con los niveles intermedios.
     if extraer_tareas:
-        grupo_extraccion >> tarea_extraccion_completa
+        for _tarea_de_extraccion in extraer_tareas:
+            _tarea_de_extraccion >> tarea_extraccion_completa
 
     tarea_verificar = ShortCircuitOperator(
         task_id="verificar_parquet",

@@ -212,8 +212,12 @@ docker run -d \
   --name spark-worker-remoto-1 \
   --restart unless-stopped \
   --network host \
+  -v /ruta/compartida/bt2sql:/data/bt2sql \
+  -v /ruta/compartida/parquet:/data/parquet \
+  -v /ruta/compartida/s2sql:/data/s2sql \
+  -v ./spark/config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro \
   --entrypoint /opt/spark/bin/spark-class \
-  apache/spark:3.5.3 \
+  spark-bsg:3.5.3 \
     org.apache.spark.deploy.worker.Worker \
     spark://IP_DEL_MASTER:7077 \
     --cores 4 \
@@ -225,7 +229,67 @@ docker run -d \
 `-e SPARK_WORKER_OPTS="-Dspark.authenticate=true -Dspark.authenticate.secret=EL_SECRETO"`
 antes del nombre de la imagen, con el mismo secreto que el master.)
 
-Tres cosas que te van a morder si no las miras:
+### Las dos razones por las que un worker nuevo "no encuentra los recursos"
+
+Esto es lo que más tiempo cuesta, así que va antes que el resto.
+
+**1. La imagen tiene que ser la propia, no la oficial.**
+`apache/spark:3.5.3` **no trae los drivers JDBC**: están en `spark-bsg`, que
+construyen los `Dockerfile` de este repositorio. Un worker con la imagen
+oficial se registra perfectamente en el master, aparece en la interfaz, acepta
+executors, y falla *dentro* del job con `No suitable driver` — un mensaje que
+no menciona la imagen por ningún lado. La imagen hay que construirla o
+exportarla a la máquina nueva:
+
+```bash
+# en la máquina que ya la tiene
+docker save spark-bsg:3.5.3 | gzip > spark-bsg.tar.gz
+# en la nueva
+gunzip -c spark-bsg.tar.gz | docker load
+```
+
+**2. La ruta de salida es LOCAL, no un sistema de archivos distribuido.**
+Y esta es la que de verdad rompe el escalado a otras máquinas.
+
+`output_dir` es `/data/bt2sql/spark`, **sin esquema**. Spark lo resuelve como
+`file:`, lo cual se ve literal cuando falla:
+
+```
+Mkdirs failed to create file:/data/bt2sql/spark/20261010/FSH005/_temporary/0
+```
+
+Y quien escribe los archivos `part-*` no es el driver: son los **executors**,
+dentro del contenedor del worker. Así que cada worker tiene que ver esa misma
+carpeta, y *la misma* significa el mismo almacenamiento, no una carpeta con el
+mismo nombre.
+
+En una sola máquina esto sale gratis: el bind mount hace que todos los
+contenedores vean la misma carpeta de Windows, y `--scale spark-worker=3`
+hereda los montajes del servicio, así que las tres réplicas escriben en el
+mismo sitio sin que haya que hacer nada. **El escalado local no tiene este
+problema.**
+
+En varias máquinas no sale gratis. Montar `/data/bt2sql` apuntando al disco
+local de cada máquina es la trampa: cada worker escribe sus `part-*` en su
+propio disco, el `_SUCCESS` queda en uno, y la carga lee una carpeta
+incompleta sin que nada falle. Las salidas:
+
+- **Un recurso compartido montado en la misma ruta en todas las máquinas**
+  (SMB o NFS). Es lo que hace que el `-v` de arriba tenga sentido. Hay que
+  comprobar que el usuario del contenedor puede escribir ahí: la imagen de
+  Spark corre como uid 185 y la de Airflow como 50000, y en un recurso de red
+  eso suele requerir opciones de montaje explícitas.
+- **Dejar la escritura en una sola máquina**, con `--cores` alto en ese worker
+  y los remotos solo para la lectura del core. Funciona si el cuello de
+  botella es Bantotal y no la escritura.
+- **Cambiar el destino a un almacenamiento de objetos** (`s3a://`, Azure Blob)
+  y que deje de ser un problema de montajes. Es el arreglo de verdad, y el que
+  tiene más trabajo detrás.
+
+Mientras `output_dir` sea una ruta local, la regla es: **todos los workers
+sobre el mismo almacenamiento, o un solo worker.**
+
+### Otras tres cosas que te van a morder
 
 - **Si usas autenticación, el secreto debe ser idéntico** en master, worker y
   cliente. Si no coincide, el worker intenta registrarse, falla y reintenta en

@@ -19,6 +19,19 @@ Ejecucion:
     o en local:
         pip install "apache-airflow==2.10.5" pytest pandas pyarrow
         AIRFLOW_HOME=/tmp/af pytest airflow/tests/unit/test_bt2sql.py -v
+
+DONDE EJECUTARLOS
+-----------------
+La suite tiene dos clases de test y no corren igual en los dos sitios:
+
+    pytest airflow/tests/unit -q                 <- DESDE EL REPOSITORIO: todos
+    docker compose exec -T airflow-scheduler \
+        pytest /opt/airflow/tests/unit -q        <- en el contenedor: los que
+                                                    necesitan Airflow instalado
+
+Los que auditan archivos de la raiz (docker-compose*.yml, setup.sh, sql/) se
+SALTAN en el contenedor con un motivo explicito, porque esa carpeta no esta
+montada ahi. Ver airflow/tests/unit/raiz_repo.py.
 """
 
 from __future__ import annotations
@@ -32,10 +45,10 @@ from pathlib import Path
 import pytest
 
 
-RAIZ = Path(__file__).resolve().parents[3]
-DIR_DAGS = RAIZ / "airflow" / "dags"
+from raiz_repo import DIR_AIRFLOW, RAIZ, requiere_repo  # noqa: E402
+DIR_DAGS = DIR_AIRFLOW / "dags"
 DIR_PRODUCCION = DIR_DAGS / "production"
-DIR_JSON = RAIZ / "airflow" / "config" / "json"
+DIR_JSON = DIR_AIRFLOW / "config" / "json"
 
 if str(DIR_PRODUCCION) not in sys.path:
     sys.path.append(str(DIR_PRODUCCION))
@@ -183,6 +196,7 @@ def test_bt2sql_carga_tiene_las_claves_de_cargar_parquet_config():
     assert sobran <= {"conn_id_destino"}, f"claves de mas: {sorted(sobran)}"
 
 
+@requiere_repo
 def test_los_procesos_de_la_variable_cruzan_con_el_catalogo_de_ejemplo():
     """La doble llave (Variable + catalogo) es el error de configuracion mas
     comun del pipeline: si NOMBRE_PARQUET y ESQUEMA no coinciden exactamente
@@ -867,6 +881,7 @@ def test_la_carpeta_de_bt2sql_esta_montada_en_todos_los_servicios():
                 )
 
 
+@requiere_repo
 def test_la_ruta_de_la_variable_cuadra_con_la_del_contenedor():
     """output_dir es la ruta de DENTRO del contenedor. Si no coincide con el
     lado derecho del bind mount, la extraccion escribe en el sistema de

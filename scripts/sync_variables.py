@@ -27,6 +27,11 @@ USO
     # una sola
     ... sync_variables.py --solo DAG_BDS_TABLAS
 
+    # crear solo las que falten, sin pisar ninguna existente. Es lo que corre
+    # airflow-init en el arranque: un stack nuevo queda configurado solo, y la
+    # edicion que alguien haya hecho por la interfaz sobrevive al reinicio.
+    ... sync_variables.py --solo-nuevas
+
 El nombre de la Variable es el nombre del archivo sin .json.
 Devuelve codigo 1 si algo fallo, para poder usarlo en CI.
 """
@@ -76,7 +81,8 @@ def _resumen(valor) -> str:
     return texto if len(texto) <= 70 else f"{texto[:67]}..."
 
 
-def sincronizar(dry_run: bool, solo: str | None) -> int:
+def sincronizar(dry_run: bool, solo: str | None,
+                solo_nuevas: bool = False) -> int:
     from airflow.models import Variable
 
     if not DIR_JSON.is_dir():
@@ -90,7 +96,7 @@ def sincronizar(dry_run: bool, solo: str | None) -> int:
             print(f"ERROR: no existe {DIR_JSON / (solo + '.json')}", file=sys.stderr)
             return 1
 
-    iguales = nuevas = actualizadas = fallidas = 0
+    iguales = nuevas = actualizadas = fallidas = respetadas = 0
 
     for archivo in archivos:
         nombre = archivo.stem
@@ -112,6 +118,24 @@ def sincronizar(dry_run: bool, solo: str | None) -> int:
             iguales += 1
             continue
 
+        # --solo-nuevas: crea lo que falta y NO toca lo que ya esta.
+        #
+        # Para esto sirve: dejar que el arranque configure un stack nuevo sin
+        # que un `docker compose up` pise la edicion que alguien hizo por la
+        # interfaz. Entre las dos formas de equivocarse -arrancar sin Variables,
+        # o borrar en silencio el arreglo de urgencia de otro- esta bandera
+        # elige la primera, que se ve enseguida y no pierde trabajo de nadie.
+        #
+        # El precio es real y conviene tenerlo claro: con esto el repo deja de
+        # ser la fuente de verdad para las Variables que ya existen. La deriva
+        # no desaparece, solo deja de corregirse sola. Por eso el resumen
+        # cuenta las respetadas aparte y dice como verlas: para que un `up` que
+        # dejo cuatro Variables sin actualizar no pase por "todo en orden".
+        if existe and solo_nuevas:
+            print(f"  respeta   {nombre}   (ya existe; --solo-nuevas no la toca)")
+            respetadas += 1
+            continue
+
         etiqueta = "actualiza" if existe else "crea"
         print(f"  {etiqueta:<9} {nombre}   {_resumen(deseado)}")
         if not dry_run:
@@ -127,8 +151,13 @@ def sincronizar(dry_run: bool, solo: str | None) -> int:
     print(
         f"\n{'(dry-run) ' if dry_run else ''}"
         f"sin cambios: {iguales} | creadas: {nuevas} | actualizadas: {actualizadas}"
-        f" | errores: {fallidas}"
+        + (f" | respetadas: {respetadas}" if respetadas else "")
+        + f" | errores: {fallidas}"
     )
+    if respetadas:
+        print(f"  {respetadas} Variable(s) ya existian y --solo-nuevas no las "
+              f"toco. Para ver si el repo y Airflow dicen lo mismo:\n"
+              f"      sync_variables.py --dry-run")
     return 1 if fallidas else 0
 
 
@@ -162,10 +191,19 @@ def main() -> int:
                         help="direccion inversa: Airflow -> archivos JSON")
     parser.add_argument("--solo", metavar="NOMBRE",
                         help="procesa una sola Variable")
+    parser.add_argument("--solo-nuevas", action="store_true",
+                        help="crea las que falten y NO sobreescribe las que ya "
+                             "existen (lo que usa airflow-init en el arranque)")
     args = parser.parse_args()
 
     print(f"Directorio: {DIR_JSON}\n")
-    return exportar(args.solo) if args.export else sincronizar(args.dry_run, args.solo)
+    if args.export:
+        if args.solo_nuevas:
+            print("ERROR: --export y --solo-nuevas van en direcciones "
+                  "contrarias; elija una.", file=sys.stderr)
+            return 1
+        return exportar(args.solo)
+    return sincronizar(args.dry_run, args.solo, args.solo_nuevas)
 
 
 if __name__ == "__main__":

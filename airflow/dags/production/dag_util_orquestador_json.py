@@ -41,9 +41,13 @@ solo del archivo, sin pasar por la Variable.
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import json
 import logging
 import os
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta
 
 from airflow.models.dag import DAG
@@ -53,10 +57,45 @@ from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.utils.trigger_rule import TriggerRule
 
-from operators.spark_operator import BsgSparkJdbcOperator
-from operators.sp_operator import EjecutarSPOperator
-
 log = logging.getLogger(__name__)
+
+
+def _clase_de_plugin(modulo: str, clase: str):
+    """Importa una clase de airflow/plugins/operators sin depender del nombre.
+
+    Airflow ANADE `plugins/` AL FINAL de sys.path, asi que cualquier paquete
+    instalado que se llame `operators` tapa el nuestro y el import falla con
+    `No module named 'operators.<x>'` mientras el archivo sigue en su sitio.
+    El respaldo carga el archivo por RUTA ABSOLUTA, que no pasa por la
+    resolucion de nombres y por tanto no se puede tapar.
+
+    La ruta se deriva de la ubicacion de este archivo y no se escribe fija,
+    para que valga igual en el contenedor que en el repositorio.
+    """
+    try:
+        return getattr(importlib.import_module(f"operators.{modulo}"), clase)
+    except ImportError:
+        pass
+
+    ruta = (Path(__file__).resolve().parents[2]
+            / "plugins" / "operators" / f"{modulo}.py")
+    if not ruta.is_file():
+        raise ImportError(
+            f"No se pudo importar operators.{modulo} por nombre -algo mas ocupa "
+            f"el nombre 'operators'- y tampoco esta en {ruta}."
+        )
+
+    spec = importlib.util.spec_from_file_location(f"_bsg_{modulo}_por_ruta", ruta)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault(spec.name, mod)
+    spec.loader.exec_module(mod)
+    log.warning("operators.%s se cargo por ruta (%s) porque el nombre "
+                "'operators' esta ocupado por otro paquete.", modulo, ruta)
+    return getattr(mod, clase)
+
+
+BsgSparkJdbcOperator = _clase_de_plugin("spark_operator", "BsgSparkJdbcOperator")
+EjecutarSPOperator = _clase_de_plugin("sp_operator", "EjecutarSPOperator")
 
 
 VARIABLE_MANIFIESTO = "orquestador_manifiesto"

@@ -5,6 +5,13 @@
 # indice: hace falta un
 #     git rm --cached .env
 # y rotar lo que ya viajo en el historial.
+#
+# 2026-10-11: la linea seguia faltando. ".env.*" NO cubre ".env" a secas -el
+# patron exige el punto y algo detras-, asi que cubria .env.bak y .env.windows
+# y dejaba fuera justo el archivo con las claves en uso. Sigue RASTREADO (lo
+# tocan 4 commits), asi que esta linea evita que empeore pero no lo arregla:
+# hace falta el git rm --cached de arriba y rotar las claves.
+.env
 .env.*
 *.bak
 *.key

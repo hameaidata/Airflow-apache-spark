@@ -154,7 +154,21 @@ depender de estas. Reintente solo las fallidas y despues sus dependientes.
 | `fin` | `all_done` + falla si algo falló | reportar, no ocultar |
 
 La dependencia entre capas va por `DEPENDE_DE_ODS` y es una arista del grafo,
-así que entra en la primera fila.
+así que entra en la tercera fila.
+
+### Y por qué una tabla BDS con dependencias no cuelga de `ods_completo`
+
+Podría, y **no la bloquearía**: `ods_completo` lleva `all_done` y siempre
+termina en éxito. El motivo de no hacerlo es el **reloj**, no los fallos.
+Colgar `bds_modulos` de `ods_completo` lo obligaría a esperar a que termine
+`ods_operaciones`, con la que no tiene ninguna relación. Así, cada tabla BDS
+arranca en cuanto está lo suyo.
+
+La capa ODS termina igual —todas sus tareas corren con `all_done` y
+`ods_completo` se alcanza siempre—; lo que ya no hay es una **barrera** entre
+las dos capas, que ahora se solapan. Si alguna vez hace falta esa barrera, por
+ejemplo para cerrar la ventana de carga de ODS antes de tocar BDS, es una línea
+en `construir_plan` y está señalada con un comentario.
 
 ## Qué hacer cuando una tabla falla
 

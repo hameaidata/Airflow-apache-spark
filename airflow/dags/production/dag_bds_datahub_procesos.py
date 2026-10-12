@@ -570,6 +570,19 @@ def construir_plan(config_ods: dict[str, Any], config_bds: dict[str, Any]) -> Pl
                     plan.aristas_bds.append((o, pid))
 
             if deps or requiere_ods:
+                # NO se agrega 'ods_completo' aqui, y la razon no es la
+                # propagacion de fallos -ods_completo lleva all_done y siempre
+                # termina en exito, asi que no bloquearia nada-. Es el RELOJ:
+                # colgar de ods_completo obligaria a bds_modulos a esperar a
+                # que termine ods_operaciones, con la que no tiene ninguna
+                # relacion. Cada tabla BDS arranca en cuanto esta lo suyo.
+                #
+                # La capa ODS termina igual: todas sus tareas corren con
+                # all_done y ods_completo se alcanza siempre. Lo que ya no hay
+                # es una barrera entre las dos capas, que se solapan.
+                #
+                # Para volver a la barrera, agregar aqui
+                # plan.aristas_bds.append(("ods_completo", pid)).
                 for d in deps:
                     if d in plan.nodos:
                         plan.aristas_bds.append((d, pid))
@@ -912,20 +925,29 @@ with DAG(
             ):
                 for proceso_cfg in grupo_cfg["PROCESOS"]:
                     pid = int(proceso_cfg["ID_PROCESO"])
-                    # Los padres de una tarea BDS son de UNA de dos clases, y
-                    # nunca de las dos a la vez (lo garantiza construir_plan):
+                    # LA REGLA DEPENDE DE QUE CLASE DE PADRES TENGA.
                     #
-                    #   con DEPENDE_DE -> dependencias de DATOS entre procesos
-                    #       BDS. all_success: si el insumo fallo, esta no corre.
-                    #   sin DEPENDE_DE -> solo ORDEN (el nivel anterior, o
-                    #       ods_completo). all_done: el nivel anterior puede
-                    #       traer tablas caidas y eso no es razon para no
-                    #       intentar esta, que no depende de ellas.
+                    # Una tarea BDS declara dependencias de DATOS o no declara
+                    # ninguna, y construir_plan se encarga de que sus padres
+                    # sean de una sola clase:
                     #
-                    # Lo que esta tarea necesite de la capa ODS NO se expresa
-                    # aqui: va por DEPENDE_DE_ODS y lo comprueba ejecutar_bds,
-                    # porque una sola trigger_rule no puede decir dos cosas
-                    # distintas a padres distintos.
+                    #   declara (DEPENDE_DE y/o DEPENDE_DE_ODS)
+                    #       padres = esas dependencias + ods_completo.
+                    #       all_success. Si un insumo fallo, Airflow la marca
+                    #       upstream_failed y NO LA INTENTA. ods_completo no
+                    #       estorba porque lleva all_done y siempre va a exito.
+                    #
+                    #   no declara ninguna
+                    #       padres = solo ORDEN (nivel anterior u ods_completo).
+                    #       all_done. Que el nivel anterior traiga tablas
+                    #       caidas no es razon para no intentar esta, que no
+                    #       depende de ellas.
+                    #
+                    # Una dependencia de ODS y una de BDS son la misma clase de
+                    # cosa -datos- y quieren la misma regla. Lo que no se podia
+                    # mezclar bajo una sola trigger_rule era una dependencia de
+                    # datos con ods_completo, que es orden; por eso ods_completo
+                    # se dejo en all_done.
                     deps_bds = dependencias_proceso(proceso_cfg, [])
                     requiere = [task_id_completo(PLAN.nodos[d])
                                 for d in PLAN.ods_requeridas.get(pid, [])]

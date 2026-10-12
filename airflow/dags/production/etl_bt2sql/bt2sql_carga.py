@@ -101,21 +101,34 @@ def obtener_jobs(cur, config: dict[str, Any], batch_id: str | None,
         )
 
     cur.execute(sql, parametros) if parametros else cur.execute(sql)
-    jobs = cur.fetchall()
-    jobs_normalizados = []
+    filas = cur.fetchall()
 
-    for ruta, destino, batch_size, commit_every in jobs:
-        jobs_normalizados.append(
-            (
-                str(ruta) if ruta is not None else None,
-                str(destino) if destino is not None else None,
-                batch_size,
-                commit_every
+    # La comprobacion del numero de columnas va ANTES de desempaquetar, y el
+    # orden es justamente el bug que esto arregla.
+    #
+    # Mas abajo habia -y sigue habiendo- un control que lanza un
+    # AirflowException diciendo cuantas columnas se esperan y cuantas llegaron.
+    # Pero la normalizacion que se agrego despues desempaqueta las cuatro por
+    # posicion, y eso corre primero: con un SELECT de tres columnas el codigo
+    # moria en un `ValueError: not enough values to unpack` y el mensaje util
+    # nunca se alcanzaba. El control estaba ahi, inalcanzable.
+    for fila in filas:
+        if len(fila) != len(COLUMNAS_JOB):
+            raise AirflowException(
+                f"sql_jobs debe devolver {len(COLUMNAS_JOB)} columnas "
+                f"({', '.join(COLUMNAS_JOB)}) y devolvio {len(fila)}. "
+                f"El codigo las desempaqueta por posicion."
             )
+
+    jobs = [
+        (
+            str(ruta) if ruta is not None else None,
+            str(destino) if destino is not None else None,
+            batch_size,
+            commit_every,
         )
-
-    jobs = jobs_normalizados
-
+        for ruta, destino, batch_size, commit_every in filas
+    ]
 
     if not jobs and not permitir_vacio:
         raise AirflowException(

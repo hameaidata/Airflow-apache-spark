@@ -1,5 +1,6 @@
 {
   "_descripcion": "Variable unica del pipeline STG_BT2SQL_CARGA_SPARK: Bantotal (IBM i) -> parquet -> STG en SQL Server. Todo lo configurable vive AQUI: los procesos, las tablas que se extraen y a que tabla sube cada una, los tamanos de lote y el paralelismo de lectura. Las dos unicas cosas que NO estan aqui son las credenciales (van en Admin > Connections) y el estado de cada corrida (va en las tablas de control).",
+  "_MODO_PRUEBA": "ESTA VARIABLE ESTA EN MODO PRUEBA (origen simulado en SQL Server, sin IBM i). El destino final del proyecto es Bantotal; nada de la arquitectura cambia por esto, solo de donde se lee. PARA VOLVER A PRODUCCION, cuatro ediciones y ninguna mas: (1) extraccion.conn_id_origen = el valor de extraccion._conn_id_origen_PRODUCCION; (2) extraccion.sql_fecha = el valor de extraccion._sql_fecha_PRODUCCION; (3) tablas[].activo = 'S' en MSFD008, FSH031 y FSH012; (4) registrar esas tres en CTL_PARAMETROS_PARQUET, que validacion_catalogo='estricto' exige. Las rutas, la subcarpeta por dia y la retencion de 7 dias son identicas en los dos modos.",
   "_sincronizar": "python scripts/sync_variables.py --solo BT2SQL_SPARK",
   "_la_doble_llave": "Una tabla entra en una corrida solo si esta en los DOS sitios de esta Variable: en 'tablas' con activo='S', y en 'extraccion.procesos' con estado=1 y el flag del calendario del dia en 1. El cruce es tablas.nombre_proceso == procesos.nombre_proceso y tablas.esquema == procesos.nombre_esquema. Si no coinciden, la tabla se extrae cero veces y el job lo dice con esos nombres.",
   "_conexiones": "CONEXION_BANTOTAL y CONEXION_SQLSERVER son de tipo Generic en Airflow. Generic no identifica el motor, asi que CADA UNA debe declararlo en su campo Extra: {\"motor\": \"as400\"} la de Bantotal y {\"motor\": \"mssql\"} la de SQL Server. Sin eso no se puede saber que driver JDBC cargar y el job falla al arrancar diciendo exactamente esto.",
@@ -21,19 +22,21 @@
       "tabla_destino": "STG_FSH005",
       "batch_size": 5000,
       "commit_every": 10,
-      "particion": {
+      "_particion_PRODUCCION": {
         "columna": "PGCOD",
         "desde": 1,
         "hasta": 999,
         "particiones": 8
-      }
+      },
+      "_particion_nota": "En la prueba la tabla tiene 6 filas y todas con PGCOD=1: las 8 particiones se repartirian 1 llena y 7 vacias, justo la deriva que advierte _tablas. Con null se lee en una sola conexion, que para 6 filas es lo correcto. Al volver a Bantotal, reponer el valor de _particion_PRODUCCION.",
+      "particion": null
     },
     {
       "nombre_proceso": "STG_MSFD008",
       "esquema": "GPPPBTDB",
       "tabla": "MSFD008",
       "descripcion": "Maestro FD008",
-      "activo": "S",
+      "activo": "N",
       "columnas": "",
       "filtro": "",
       "tipos": "",
@@ -47,7 +50,7 @@
       "esquema": "GPPPBTDB",
       "tabla": "FSH031",
       "descripcion": "Saldos diarios consolidados",
-      "activo": "S",
+      "activo": "N",
       "columnas": "",
       "filtro": "",
       "tipos": "",
@@ -61,7 +64,7 @@
       "esquema": "GPPPBTDB",
       "tabla": "FSH012",
       "descripcion": "Historico de saldos contables",
-      "activo": "S",
+      "activo": "N",
       "columnas": "",
       "filtro": "",
       "tipos": "",
@@ -74,11 +77,14 @@
   "extraccion": {
     "output_dir": "/data/bt2sql/spark",
     "retencion_dias": 7,
-    "sql_fecha": "SELECT PGFCIE FROM GPPPBTDB.FST017 FETCH FIRST 1 ROW ONLY",
+    "_sql_fecha_PRODUCCION": "SELECT PGFCIE FROM GPPPBTDB.FST017 FETCH FIRST 1 ROW ONLY",
+    "_sql_fecha_nota": "FETCH FIRST ... ROW ONLY es sintaxis DB2 for i y SQL Server no la acepta sin OFFSET y ORDER BY. De ahi que haya dos valores. La fecha se lee del ORIGEN y no del destino a proposito: la STG la llena este mismo proceso, asi que leerla de ahi seria preguntarle a la corrida anterior.",
+    "sql_fecha": "SELECT TOP 1 PGFCIE FROM GPPPBTDB.FST017",
     "tb_proceso_parquet": "ctl_proceso_parquet",
     "sql_parametros_parquet": "SELECT ESQUEMA, TABLA, COLUMNAS, FILTRO, ACTIVO, NOMBRE_PARQUET, TIPOS, TABLA_DESTINO, BATCH_SIZE FROM CTL_PARAMETROS_PARQUET WHERE ACTIVO = 'S'",
     "error_size_limit": 4000,
-    "conn_id_origen": "CONEXION_BANTOTAL",
+    "_conn_id_origen_PRODUCCION": "CONEXION_BANTOTAL",
+    "conn_id_origen": "CONEXION_SQLSERVER",
     "conn_id_destino": "CONEXION_SQLSERVER",
     "nom_proceso": "SPARK_EXTRACCION_BANTOTAL",
     "estado_ejecutando": "EJECUTANDO",

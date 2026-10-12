@@ -39,6 +39,7 @@ no en producción.
 - [VALIDAR_PIPELINE_SPARK.md](VALIDAR_PIPELINE_SPARK.md) - los comandos para validar el pipeline Spark en orden, de `compose config` a comparar contra el pipeline de pandas.
 - [CAPAS_ODS_BDS.md](CAPAS_ODS_BDS.md) - que pasa cuando una tabla de ODS o BDS falla: por que la capa ODS termina igual, como BDS continua solo con lo que paso, y por que la corrida acaba en rojo de todas formas.
 | [PIPELINE_BT2SQL.md](PIPELINE_BT2SQL.md) | Trabaja sobre Bantotal → Parquet → STG en SQL Server |
+| [ORIGEN_Y_DESTINO.md](ORIGEN_Y_DESTINO.md) | Necesita saber en qué seis sitios está declarado el origen y el destino, o va a cambiar uno de los dos |
 | [TABLAS_DE_CONTROL_Y_LOGS.md](TABLAS_DE_CONTROL_Y_LOGS.md) | Necesita saber qué tabla de control escribe cada proceso |
 | [MODELO_CONTROL_UNIFICADO.md](MODELO_CONTROL_UNIFICADO.md) | Va a tocar el modelo de parámetros y logs. **Tiene cinco decisiones abiertas al final** |
 

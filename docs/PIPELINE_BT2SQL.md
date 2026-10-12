@@ -221,6 +221,73 @@ tabla destino que no recibió datos, porque truncarla la dejaría vacía sin
 motivo. Una tabla que aparece días seguidos como `SIN_DATOS` casi siempre
 significa que el `FILTRO` quedó mal escrito.
 
+## El FILTRO y sus marcas de fecha
+
+`FILTRO` es el `WHERE` de cada tabla, sin la palabra `WHERE`. Se declara en
+`tablas[].filtro` de la Variable, o en la columna `FILTRO` del catálogo según
+`origen_tablas`. **No todas las tablas llevan filtro**: vacío significa traer
+la tabla entera, y es el caso normal.
+
+Cuando el filtro depende de la fecha, no se escribe la fecha a mano: se usa una
+marca, y el job la sustituye con la **misma** fecha que leyó del core
+(`GPPPBTDB.FST017`, campo `PGFCIE`) y que va a la columna `FECHA_PROCESO` y a
+la subcarpeta del día. Así las tres no pueden desalinearse, y el catálogo no
+hay que editarlo cada día.
+
+```
+FILTRO = "FSH005FEC = {FECHA_AAAAMMDD}"
+   ->    WHERE FSH005FEC = 20261010
+```
+
+| Marca | Se sustituye por | Para |
+|---|---|---|
+| `{FECHA_AAAAMMDD}` | `20261010`, **sin comillas** | las fechas de Bantotal, que son `DECIMAL(8,0)` |
+| `{FECHA_ISO}` | `'2026-10-10'`, **con comillas** | columnas `DATE` de verdad |
+| `{FECHA_AAAAMM}` | `202610` | tablas mensuales |
+| `{FECHA_AAAA}` | `2026` | tablas anuales |
+| `{BATCH_ID}` | `'20261012091533'`, con comillas | trazabilidad |
+
+Las de fecha admiten un desplazamiento en días, para ventanas:
+
+```
+FILTRO = "FSH005FEC BETWEEN {FECHA_AAAAMMDD-6} AND {FECHA_AAAAMMDD}"
+   ->    WHERE FSH005FEC BETWEEN 20261004 AND 20261010
+```
+
+**Comillas o no comillas es el error que más cuesta ver.** `FSH005FEC` es
+`DECIMAL(8,0)`: `{FECHA_AAAAMMDD}` va sin comillas. Si saliera `'20261010'`, o
+falla el tipo, o —peor— DB2 lo compara como texto y el `WHERE` devuelve algo
+que no es lo pedido **sin dar error**. Para eso está `{FECHA_ISO}`, que es la
+que lleva comillas, y se usa solo en columnas `DATE`.
+
+**Una marca que no existe detiene el job.** Si se escribe `{FECHA}` o
+`{FECHA_PROCESO}` —que es lo que uno escribiría por intuición y no existen— la
+extracción falla diciendo cuáles hay. Es deliberado: dejarla pasar literal es
+peor, porque contra SQL Server da un error de sintaxis oscuro y contra DB2 for i
+hay sintaxis donde una llave no revienta y el `WHERE` acaba significando otra
+cosa.
+
+Los literales de fecha de ODBC y JDBC, `{d '2026-01-01'}`, son SQL legítimo y
+no se tocan.
+
+**Esto no sanea el FILTRO.** Sigue siendo SQL libre que se concatena en la
+consulta contra el core: quien pueda editar esa columna puede consultar
+cualquier cosa del origen. Dele permiso de escritura solo a quien ya tendría
+ese acceso de todos modos. Lo único que añaden las marcas son valores que
+calcula el propio proceso.
+
+El `SELECT` resuelto —con el `WHERE` ya sustituido— queda en el log de cada
+tarea, en la línea `SQL :`. Es la única forma de comprobar que la fecha
+sustituida es la que se esperaba, porque ese `WHERE` no está escrito en ningún
+sitio.
+
+Las marcas las resuelve `sustituir_marcas()`, que está **duplicada** en el job
+de Spark (`spark/jobs/etl/bt2sql_extraccion_spark.py`) y en el pipeline de
+pandas (`airflow/dags/production/etl_bt2sql/bt2sql_extraccion.py`). Duplicar
+está bien —el job de Spark no puede importar del paquete de los DAG— mientras
+no pueda divergir en silencio: hay un test que compara las dos salidas caso por
+caso y falla si no coinciden.
+
 **Carga** (`ctl_carga_stg.estado`): `INICIADO` → `FINALIZADO` o `ERROR`. Los
 cuatro valores salen de la Variable, no están escritos en el código.
 

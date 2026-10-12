@@ -16,6 +16,19 @@ tests convierten ese olvido en un fallo de CI.
 
 Ejecucion:
     docker compose exec airflow-scheduler pytest /opt/airflow/tests/unit/test_configuracion.py -v
+
+DONDE EJECUTARLOS
+-----------------
+La suite tiene dos clases de test y no corren igual en los dos sitios:
+
+    pytest airflow/tests/unit -q                 <- DESDE EL REPOSITORIO: todos
+    docker compose exec -T airflow-scheduler \
+        pytest /opt/airflow/tests/unit -q        <- en el contenedor: los que
+                                                    necesitan Airflow instalado
+
+Los que auditan archivos de la raiz (docker-compose*.yml, setup.sh, sql/) se
+SALTAN en el contenedor con un motivo explicito, porque esa carpeta no esta
+montada ahi. Ver airflow/tests/unit/raiz_repo.py.
 """
 
 from __future__ import annotations
@@ -26,7 +39,7 @@ from pathlib import Path
 import pytest
 
 
-RAIZ = Path(__file__).resolve().parents[3]
+from raiz_repo import DIR_AIRFLOW, RAIZ, requiere_repo  # noqa: E402
 
 COMPOSES = ["docker-compose.windows.yml", "docker-compose.rhel.yml",
             "docker-compose.ubuntu.yml", "docker-compose.tls.yml"]
@@ -63,6 +76,7 @@ def variables_de(script: str) -> set[str]:
 
 
 @pytest.mark.parametrize("script", ["setup.sh", "setup.ps1"])
+@requiere_repo
 def test_el_setup_cubre_todo_lo_que_piden_los_compose(script):
     """La prueba principal. Una variable que el compose usa y el setup no
     escribe deja un hueco que solo se nota al levantar el stack."""
@@ -74,6 +88,7 @@ def test_el_setup_cubre_todo_lo_que_piden_los_compose(script):
     )
 
 
+@requiere_repo
 def test_los_dos_setup_generan_lo_mismo():
     """Windows y Linux tienen que producir el mismo juego de variables.
 
@@ -88,6 +103,7 @@ def test_los_dos_setup_generan_lo_mismo():
 
 
 @pytest.mark.parametrize("variable", ["AIRFLOW_IMAGE", "SPARK_IMAGE"])
+@requiere_repo
 def test_las_imagenes_propias_no_quedan_comentadas(variable):
     """Las dos imagenes propias son obligatorias, no opcionales.
 
@@ -104,6 +120,7 @@ def test_las_imagenes_propias_no_quedan_comentadas(variable):
         )
 
 
+@requiere_repo
 def test_el_compose_pasa_los_pools_a_los_contenedores():
     """Cuatro DAGs leen AIRFLOW_POOL_* con os.environ.
 
@@ -113,7 +130,7 @@ def test_el_compose_pasa_los_pools_a_los_contenedores():
     que lo explique.
     """
     leidas = set()
-    for py in (RAIZ / "airflow" / "dags").rglob("*.py"):
+    for py in (DIR_AIRFLOW / "dags").rglob("*.py"):
         leidas |= set(re.findall(r'os\.environ\.get\("(AIRFLOW_POOL_[A-Z_]+)"',
                                  py.read_text(encoding="utf-8", errors="replace")))
     assert leidas, "ningun DAG lee AIRFLOW_POOL_*: revise si este test sigue teniendo sentido"
@@ -130,6 +147,7 @@ def test_el_compose_pasa_los_pools_a_los_contenedores():
             )
 
 
+@requiere_repo
 def test_las_rutas_de_parquet_cuadran_con_las_variables_de_airflow():
     """output_dir de cada Variable tiene que coincidir con el lado derecho del
     bind mount. Si no, la extraccion escribe en una ruta que no esta montada:
@@ -137,7 +155,7 @@ def test_las_rutas_de_parquet_cuadran_con_las_variables_de_airflow():
     desaparecen al reiniciar."""
     import json
 
-    dir_json = RAIZ / "airflow" / "config" / "json"
+    dir_json = DIR_AIRFLOW / "config" / "json"
     compose = (RAIZ / "docker-compose.windows.yml").read_text(encoding="utf-8")
 
     esperado = {
@@ -165,6 +183,7 @@ def test_las_rutas_de_parquet_cuadran_con_las_variables_de_airflow():
 # ============================================================================
 @pytest.mark.parametrize("script", ["scripts/preparar-bundle-offline.ps1",
                                     "scripts/preparar-bundle-offline.sh"])
+@requiere_repo
 def test_el_bundle_exporta_las_dos_imagenes_propias(script):
     archivo = RAIZ / script
     if not archivo.exists():
@@ -180,6 +199,7 @@ def test_el_bundle_exporta_las_dos_imagenes_propias(script):
 
 @pytest.mark.parametrize("script", ["scripts/preparar-bundle-offline.ps1",
                                     "scripts/preparar-bundle-offline.sh"])
+@requiere_repo
 def test_el_bundle_no_exporta_la_imagen_de_spark_equivocada(script):
     """apache/spark es la BASE. La que el .env nombra es spark-bsg.
 
@@ -202,6 +222,7 @@ def test_el_bundle_no_exporta_la_imagen_de_spark_equivocada(script):
 
 @pytest.mark.parametrize("script", ["scripts/construir_imagen.ps1",
                                     "scripts/construir_imagen.sh"])
+@requiere_repo
 def test_el_constructor_hace_las_dos_imagenes(script):
     """Construir solo airflow-bsg y descubrirlo en el destino es como se llega
     a un servidor aislado sin poder levantar Spark."""
@@ -216,6 +237,7 @@ def test_el_constructor_hace_las_dos_imagenes(script):
     )
 
 
+@requiere_repo
 def test_el_bundle_copia_el_ddl():
     """Sin sql/ no viaja ningun DDL: ni las tablas de control ni los stored
     procedures. El destino quedaria sin donde escribir."""
@@ -234,6 +256,7 @@ BUNDLE = ["scripts/preparar-bundle-offline.ps1", "scripts/preparar-bundle-offlin
 
 
 @pytest.mark.parametrize("script", BUNDLE)
+@requiere_repo
 def test_el_bundle_limpia_el_destino_antes_de_copiar(script):
     """Copiar encima sobrescribe, pero no borra lo que sobra.
 
@@ -260,6 +283,7 @@ def test_el_bundle_limpia_el_destino_antes_de_copiar(script):
 
 
 @pytest.mark.parametrize("script", BUNDLE)
+@requiere_repo
 def test_el_bundle_comprueba_que_lo_critico_aterrizo(script):
     """.airflowignore empieza por punto, y de el depende que el servidor
     aislado NO registre los cuatro DAGs de examples/ y templates/ -uno de los
@@ -275,6 +299,7 @@ def test_el_bundle_comprueba_que_lo_critico_aterrizo(script):
 
 
 @pytest.mark.parametrize("script", BUNDLE)
+@requiere_repo
 def test_el_bundle_lleva_el_registro_privado(script):
     """registry:2 son 25 MB y es la unica forma de tener un registro dentro de
     la red aislada: ninguno de la nube se alcanza desde alla. Omitirlo no se
@@ -288,6 +313,7 @@ def test_el_bundle_lleva_el_registro_privado(script):
 
 
 @pytest.mark.parametrize("script", BUNDLE)
+@requiere_repo
 def test_el_bundle_no_lleva_ningun_env(script):
     """.env.bak lleva los MISMOS secretos que .env. Borrar solo .env dejaba el
     respaldo viajando al servidor destino."""

@@ -46,7 +46,7 @@ import logging
 import os
 import re
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -276,19 +276,147 @@ def validar(valor, campo: str) -> str:
     return v
 
 
-def construir_select(fila: dict) -> str:
+# ---------------------------------------------------------------------------
+# LAS MARCAS DEL FILTRO
+# ---------------------------------------------------------------------------
+# FILTRO es el WHERE de cada tabla, y hasta ahora se concatenaba TAL CUAL. Eso
+# obliga a escribir la fecha a mano y a editar el catalogo cada dia, que es la
+# forma mas segura de que un dia se olvide y la extraccion traiga el dia
+# equivocado sin que nada falle.
+#
+# Con las marcas, el filtro se escribe UNA vez y la fecha la pone el job, con
+# el mismo valor que ya leyo de GPPPBTDB.FST017 (el campo PGFCIE). Es la misma
+# fecha que va a FECHA_PROCESO y a la subcarpeta del dia, asi que las tres
+# cosas no pueden desalinearse.
+#
+#     FILTRO = "FSH005FEC = {FECHA_AAAAMMDD}"
+#       ->    WHERE FSH005FEC = 20261010
+#
+# LAS MARCAS
+#   {FECHA_AAAAMMDD}  20261010      sin comillas. Para las columnas de fecha
+#                                   de Bantotal, que son DECIMAL(8,0)
+#   {FECHA_ISO}       '2026-10-10'  CON comillas. Para columnas DATE de verdad
+#   {FECHA_AAAAMM}    202610        tablas mensuales
+#   {FECHA_AAAA}      2026          tablas anuales
+#   {BATCH_ID}        '2026...'     CON comillas. Trazabilidad
+#
+# Las de fecha admiten un desplazamiento en DIAS, para ventanas:
+#
+#     FILTRO = "FSH005FEC BETWEEN {FECHA_AAAAMMDD-6} AND {FECHA_AAAAMMDD}"
+#       ->    WHERE FSH005FEC BETWEEN 20261004 AND 20261010
+#
+# UNA MARCA DESCONOCIDA ES UN ERROR, NO SE DEJA PASAR
+# ---------------------------------------------------
+# Si se escribe {FECHA} o {FECHA_PROCESO} -que no existen- el job FALLA
+# diciendo cuales hay. Dejarla pasar literal seria peor que fallar: contra
+# SQL Server da un error de sintaxis oscuro, y contra DB2 for i hay sintaxis
+# donde una llave no revienta y el WHERE acaba significando otra cosa.
+#
+# ESTO NO SANEA EL FILTRO
+# -----------------------
+# FILTRO sigue siendo SQL libre concatenado, con todo lo que eso implica:
+# quien pueda editar esa columna puede consultar cualquier cosa del origen.
+# Lo unico que anaden las marcas son valores que calcula el propio job -una
+# fecha y un batch_id-, no una validacion de lo que el humano escribio.
+#
+# ESTA FUNCION ESTA DUPLICADA en el pipeline de pandas
+# (airflow/dags/production/etl_bt2sql/bt2sql_extraccion.py). Hay un test que
+# compara las dos salidas y falla si divergen: mismo criterio que la lista de
+# drivers JDBC de los dos Dockerfile. Duplicar esta bien mientras no pueda
+# pasar en silencio.
+MARCAS_FILTRO = re.compile(r"\{([A-Z][A-Z0-9_]*)(?:\s*([+-])\s*(\d{1,4}))?\}")
+
+# Lo que PARECE una marca y no se sustituyo. No vale con buscar "{" a secas:
+# JDBC y ODBC tienen literales de fecha con llaves -{d '2026-01-01'}- que son
+# SQL legitimo, y este patron no los toca porque llevan comilla y espacio.
+RESTO_DE_MARCA = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*(?:\s*[+-]\s*\d+)?\}")
+
+# El batch_id acaba DENTRO de una cadena SQL, asi que se comprueba antes.
+# Hoy lo genera preparar_config y son 14 digitos, pero el job se puede invocar
+# a mano con --batch-id, y esa es la puerta por la que entraria una comilla.
+BATCH_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+
+MARCAS_VALIDAS = ("FECHA_AAAAMMDD", "FECHA_ISO", "FECHA_AAAAMM",
+                  "FECHA_AAAA", "BATCH_ID")
+
+
+def sustituir_marcas(filtro: str, tabla: str, fecha_proceso=None,
+                     batch_id: str | None = None) -> str:
+    """Resuelve las marcas de un FILTRO. Sin marcas, lo devuelve intacto."""
+    if not filtro or "{" not in filtro:
+        return filtro
+
+    def una(m) -> str:
+        nombre, signo, cantidad = m.group(1), m.group(2), m.group(3)
+
+        if nombre not in MARCAS_VALIDAS:
+            raise SystemExit(
+                f"[{tabla}] FILTRO usa una marca que no existe: "
+                f"{{{nombre}}}.\nLas que hay son: "
+                + ", ".join("{" + x + "}" for x in MARCAS_VALIDAS)
+                + "\nLas de fecha admiten un desplazamiento en dias, "
+                  "por ejemplo {FECHA_AAAAMMDD-6}.")
+
+        if nombre == "BATCH_ID":
+            if signo:
+                raise SystemExit(
+                    f"[{tabla}] FILTRO aplica un desplazamiento a "
+                    f"{{BATCH_ID}}, y un batch_id no es una fecha.")
+            if batch_id is None:
+                raise SystemExit(
+                    f"[{tabla}] FILTRO usa {{BATCH_ID}} pero esta extraccion "
+                    f"no recibio batch_id.")
+            if not BATCH_SEGURO.match(str(batch_id)):
+                raise SystemExit(
+                    f"[{tabla}] el batch_id {batch_id!r} tiene caracteres que "
+                    f"no se admiten dentro de un FILTRO. Solo letras, digitos "
+                    f"y _, hasta 32.")
+            return f"'{batch_id}'"
+
+        if fecha_proceso is None:
+            raise SystemExit(
+                f"[{tabla}] FILTRO usa {{{nombre}}} pero esta extraccion no "
+                f"recibio la fecha de proceso. La lee sql_fecha de la "
+                f"Variable, de GPPPBTDB.FST017.")
+
+        dias = int(cantidad or 0) * (-1 if signo == "-" else 1)
+        f = fecha_proceso + timedelta(days=dias)
+
+        if nombre == "FECHA_AAAAMMDD":
+            return f"{f:%Y%m%d}"
+        if nombre == "FECHA_ISO":
+            return f"'{f:%Y-%m-%d}'"
+        if nombre == "FECHA_AAAAMM":
+            return f"{f:%Y%m}"
+        return f"{f:%Y}"                                  # FECHA_AAAA
+
+    resuelto = MARCAS_FILTRO.sub(una, filtro)
+
+    sobra = RESTO_DE_MARCA.search(resuelto)
+    if sobra:
+        raise SystemExit(
+            f"[{tabla}] FILTRO deja sin resolver {sobra.group(0)}. Las marcas "
+            f"van en MAYUSCULAS y sin espacios dentro de las llaves. "
+            f"Las que hay son: "
+            + ", ".join("{" + x + "}" for x in MARCAS_VALIDAS))
+    return resuelto
+
+
+def construir_select(fila: dict, fecha_proceso=None,
+                     batch_id: str | None = None) -> str:
     esquema = validar(fila["ESQUEMA"], "ESQUEMA")
     tabla = validar(fila["TABLA"], "TABLA")
     columnas = (str(fila.get("COLUMNAS") or "*")).strip() or "*"
     sql = f"SELECT {columnas} FROM {esquema}.{tabla}"
     filtro = (str(fila.get("FILTRO") or "")).strip()
     if filtro:
-        sql += f" WHERE {filtro}"
+        sql += f" WHERE {sustituir_marcas(filtro, tabla, fecha_proceso, batch_id)}"
     return sql
 
 
 def leer_origen(spark, url: str, clase: str, usuario: str, clave: str,
-                fila: dict, particion: dict | None, fetchsize: int):
+                fila: dict, particion: dict | None, fetchsize: int,
+                fecha_proceso=None, batch_id: str | None = None):
     """Lee la tabla del core. Con particion, en paralelo; sin ella, en un hilo.
 
     El aviso cuando falta la particion no es decorativo: sin ella este job hace
@@ -297,7 +425,15 @@ def leer_origen(spark, url: str, clase: str, usuario: str, clave: str,
     tiempos semana tras semana.
     """
     tabla = fila["TABLA"]
-    consulta = f"({construir_select(fila)}) AS q"
+    select = construir_select(fila, fecha_proceso, batch_id)
+    consulta = f"({select}) AS q"
+
+    # El SELECT resuelto, en el log. El pipeline de pandas ya lo hacia y este
+    # no: con FILTRO literal se podia deducir del catalogo, pero con las
+    # marcas el WHERE que de verdad se manda ya no esta escrito en ningun
+    # sitio, y sin esta linea no habria forma de comprobar que la fecha
+    # sustituida es la que se esperaba.
+    logger.info("   SQL : %s", select)
 
     lector = (spark.read.format("jdbc")
               .option("url", url)
@@ -504,7 +640,7 @@ def cerrar_log(conn_ctl, cfg: dict, id_log: int, estado: str,
                  f"UPDATE {cfg['tb_proceso_parquet']} SET "
                  f"  estado = ?, fec_termino = SYSDATETIME(), "
                  f"  archivo_parquet = COALESCE(?, archivo_parquet), "
-                 f"  filas_extraidas = COALESCE(?, filas_extraidas), "
+                 f"  filas_procesadas = COALESCE(?, filas_procesadas), "
                  f"  duracion_segundos = ?, msg_error = ? "
                  f"WHERE id_log = ?",
                  (estado, archivo, filas, segundos,
@@ -600,15 +736,41 @@ def main() -> int:
             logger.info("Corrida de UN SOLO proceso: %s", args.proceso)
         carpeta_dia = f"{cfg['output_dir']}/{fecha_proceso:%Y%m%d}"
 
-        for fila in catalogo:
+        # enumerate y no un bucle simple: con una tabla el contador no hace
+        # falta, pero con veinte -y con tablas que tardan minutos- el log sin
+        # "[7/20]" obliga a contar lineas hacia atras para saber por donde va.
+        total_tablas = len(catalogo)
+        for n_tabla, fila in enumerate(catalogo, 1):
             tabla = str(fila["TABLA"])
             inicio = datetime.now()
             id_log = abrir_log(conn_ctl, cfg, fila, args.batch_id, fecha_proceso)
             destino = f"{carpeta_dia}/{tabla}"
+
+            # LA CABECERA DE CADA TABLA
+            #
+            # Antes de este bloque el log solo decia que tabla se habia
+            # extraido DESPUES de terminarla. Con las tablas de Bantotal, de 5
+            # filas, da igual. Con una tabla de millones de filas son minutos
+            # de silencio en los que no se sabe en que esta el job: si se
+            # quedo colgado abriendo la conexion, si esta leyendo, o si esta
+            # escribiendo. Y si falla, el ERROR salia sin que nada antes
+            # dijera a que tabla pertenece.
+            #
+            # El id_log va aqui a proposito: es la llave para buscar esta
+            # misma tabla en ctl_proceso_parquet mientras el job sigue
+            # corriendo, sin esperar a que acabe.
+            logger.info("=" * 72)
+            logger.info("EXTRAYENDO [%s/%s]  %s.%s", n_tabla, total_tablas,
+                        fila.get("ESQUEMA", "?"), tabla)
+            logger.info("   destino parquet : %s", destino)
+            logger.info("   destino STG     : %s",
+                        fila.get("TABLA_DESTINO") or "(sin declarar)")
+            logger.info("   id_log          : %s   batch: %s", id_log, args.batch_id)
             try:
                 df = leer_origen(spark, args.jdbc_url, args.driver_class,
                                  bt_usuario, bt_clave, fila,
-                                 fila.get("_PARTICION"), cfg.get("fetchsize", 10000))
+                                 fila.get("_PARTICION"), cfg.get("fetchsize", 10000),
+                                 fecha_proceso, args.batch_id)
 
                 # Orden de preferencia de los tipos: Variable > tabla destino
                 # > lo que infiera el driver. Ver tipos_de_destino().
@@ -643,21 +805,52 @@ def main() -> int:
                     resultados.append({"tabla": tabla, "filas": 0, "estado": "SIN_DATOS"})
                     continue
 
-                (df.coalesce(int(cfg.get("archivos_por_tabla", 1)))
+                # Separar el tiempo de LEER del de ESCRIBIR.
+                #
+                # El df.count() de arriba es lo que fuerza la lectura entera
+                # del origen: hasta esa linea Spark no ha traido nada. Asi que
+                # el tiempo hasta aqui es LEER y el de la escritura de abajo es
+                # ESCRIBIR. Con una sola linea al final los dos quedaban
+                # sumados, y son dos tramos que se afinan con palancas
+                # distintas: la lectura con 'particion', la escritura con
+                # 'archivos_por_tabla'.
+                archivos = int(cfg.get("archivos_por_tabla", 1))
+                leido_en = (datetime.now() - inicio).total_seconds()
+                logger.info("   leidas %s fila(s) en %.1f s; escribiendo "
+                            "parquet en %s archivo(s)...",
+                            f"{n:,}", leido_en, archivos)
+                if archivos == 1 and n > 1000000:
+                    logger.warning(
+                        "   archivos_por_tabla=1 con %s filas: el coalesce(1) "
+                        "deja TODA la escritura en una sola tarea de Spark, en "
+                        "un core. Subir executors no acelera este tramo; hay "
+                        "que subir archivos_por_tabla en la Variable.",
+                        f"{n:,}")
+
+                (df.coalesce(archivos)
                    .write.mode("overwrite")
                    .parquet(destino))
 
                 segundos = (datetime.now() - inicio).total_seconds()
                 cerrar_log(conn_ctl, cfg, id_log, cfg["estado_terminado"],
                            archivo=destino, filas=n, segundos=segundos)
-                logger.info("[%s] %s filas -> %s  (%.1f s)", tabla, f"{n:,}", destino, segundos)
+                logger.info("EXTRAIDA   [%s/%s]  %s  ->  %s",
+                            n_tabla, total_tablas, tabla, destino)
+                logger.info("   %s fila(s)  |  leer %.1f s  +  escribir %.1f s  "
+                            "=  %.1f s  |  %s fila/s",
+                            f"{n:,}", leido_en, segundos - leido_en, segundos,
+                            f"{int(n / segundos):,}" if segundos > 0 else "-")
                 resultados.append({"tabla": tabla, "filas": n, "estado": "TERMINADO"})
 
             except Exception as exc:                            # noqa: BLE001
                 segundos = (datetime.now() - inicio).total_seconds()
                 cerrar_log(conn_ctl, cfg, id_log, cfg["estado_error"],
                            segundos=segundos, error=str(exc))
-                logger.error("[%s] ERROR: %s", tabla, exc)
+                logger.error("FALLO      [%s/%s]  %s.%s  ->  %s  (%.1f s)",
+                             n_tabla, total_tablas, fila.get("ESQUEMA", "?"),
+                             tabla, fila.get("TABLA_DESTINO") or "(sin declarar)",
+                             segundos)
+                logger.error("   %s", exc)
                 con_error.append(tabla)
                 resultados.append({"tabla": tabla, "filas": 0, "estado": "ERROR"})
     finally:

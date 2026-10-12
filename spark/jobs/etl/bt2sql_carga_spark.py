@@ -258,7 +258,8 @@ def main() -> int:
     try:
         jobs = lotes_por_cargar(cfg, conn, args.batch_id)
 
-        for job in jobs:
+        total_jobs = len(jobs)
+        for n_job, job in enumerate(jobs, 1):
             ruta = str(job["archivo_parquet"])
             destino_nombre = str(job["tabla_destino"])
             inicio = datetime.now()
@@ -266,6 +267,26 @@ def main() -> int:
             esquema, tabla = partir_destino(destino_nombre)
             destino = corchetes(esquema, tabla)
             staging = corchetes(esquema, f"{tabla}{cfg['sufijo_staging']}")
+
+            # LA CABECERA DE CADA TABLA
+            #
+            # La carga tiene TRES fases y las tres pueden tardar: crear la
+            # staging, escribirla por JDBC (la unica que paraleliza), y el
+            # TRUNCATE+INSERT final, que va en una sola transaccion y por
+            # tanto en un solo hilo. Con una sola linea al final no habia
+            # forma de saber en cual se estaba, ni cual se come el tiempo.
+            #
+            # Las dos tablas aparecen con nombre completo -esquema incluido-
+            # porque origen y destino viven en esquemas distintos y "FSH005"
+            # a secas no dice si se habla de la de Bantotal o de la STG.
+            logger.info("=" * 72)
+            logger.info("CARGANDO   [%s/%s]  %s  ->  %s.%s",
+                        n_job, total_jobs,
+                        os.path.basename(ruta.rstrip("/")), esquema, tabla)
+            logger.info("   parquet  : %s", ruta)
+            logger.info("   staging  : %s.%s%s",
+                        esquema, tabla, cfg["sufijo_staging"])
+            logger.info("   id_log   : %s   batch: %s", id_log, args.batch_id)
             try:
                 df = spark.read.parquet(ruta)
                 columnas = df.columns
@@ -277,6 +298,9 @@ def main() -> int:
                 #    infiera del parquet. Si se declararan aqui, un VARCHAR(50)
                 #    contra un VARCHAR(MAX) pasaria desapercibido hasta que una
                 #    fila larga reventara el INSERT final.
+                particiones = df.rdd.getNumPartitions()
+                logger.info("   fase 1/3 : creando staging con los tipos de "
+                            "%s.%s (%s columna(s))", esquema, tabla, len(columnas))
                 ejecutar(conn, f"DROP TABLE IF EXISTS {staging}")
                 ejecutar(conn, f"SELECT TOP 0 {cols} INTO {staging} FROM {destino}")
 
@@ -284,16 +308,38 @@ def main() -> int:
                 #    "overwrite": overwrite borraria la staging recien creada y
                 #    la recrearia con los tipos inferidos por Spark, que es
                 #    justo lo que el paso 1 evita.
+                tam_lote = int(job.get("batch_size") or cfg["batch_default"])
+
+                # El numero de particiones del parquet decide cuantas
+                # conexiones JDBC escriben a la vez: una por particion. Es la
+                # consecuencia directa de archivos_por_tabla en la extraccion,
+                # y por eso se registra aqui -en el tramo donde se nota- y no
+                # solo alla.
+                logger.info("   fase 2/3 : escribiendo en la staging por JDBC "
+                            "| %s particion(es) en paralelo | batchsize %s",
+                            particiones, f"{tam_lote:,}")
+                if particiones == 1:
+                    logger.warning(
+                        "   el parquet tiene UNA sola particion: la escritura "
+                        "va por una sola conexion. Viene de "
+                        "archivos_por_tabla=1 en la extraccion.")
+                fase1_fin = datetime.now()
+
                 (df.write
                    .mode("append")
-                   .option("batchsize", int(job.get("batch_size") or cfg["batch_default"]))
+                   .option("batchsize", tam_lote)
                    .option("isolationLevel", "READ_COMMITTED")
                    .jdbc(args.jdbc_url, f"{esquema}.{tabla}{cfg['sufijo_staging']}",
                          properties=propiedades))
+                fase2_seg = (datetime.now() - fase1_fin).total_seconds()
 
                 escritas = int(filas_de(conn, f"SELECT COUNT(*) AS N FROM {staging}")[0]["N"])
 
                 # 3) el intercambio, en UNA transaccion
+                logger.info("   fase 3/3 : TRUNCATE %s.%s + INSERT de %s "
+                            "fila(s) desde la staging, en UNA transaccion",
+                            esquema, tabla, f"{escritas:,}")
+                fase3_ini = datetime.now()
                 conn.setAutoCommit(False)
                 try:
                     ejecutar(conn, f"TRUNCATE TABLE {destino}")
@@ -308,16 +354,27 @@ def main() -> int:
                 segundos = (datetime.now() - inicio).total_seconds()
                 cerrar_log(conn, cfg, id_log, cfg["estado_finalizado"],
                            filas=escritas, segundos=segundos)
-                logger.info("%-28s -> %-28s  %s filas  %.1f s",
-                            os.path.basename(ruta.rstrip("/")), destino_nombre,
-                            f"{escritas:,}", segundos)
+                fase3_seg = (datetime.now() - fase3_ini).total_seconds()
+                logger.info("CARGADA    [%s/%s]  %s  ->  %s.%s",
+                            n_job, total_jobs,
+                            os.path.basename(ruta.rstrip("/")), esquema, tabla)
+                logger.info("   %s fila(s)  |  staging %.1f s  +  JDBC %.1f s  "
+                            "+  intercambio %.1f s  =  %.1f s  |  %s fila/s",
+                            f"{escritas:,}",
+                            segundos - fase2_seg - fase3_seg,
+                            fase2_seg, fase3_seg, segundos,
+                            f"{int(escritas / segundos):,}" if segundos > 0 else "-")
                 resultados.append({"destino": destino_nombre, "filas": escritas})
 
             except Exception as exc:                            # noqa: BLE001
                 segundos = (datetime.now() - inicio).total_seconds()
                 cerrar_log(conn, cfg, id_log, cfg["estado_error"],
                            segundos=segundos, error=str(exc))
-                logger.error("%-28s ERROR: %s", destino_nombre, exc)
+                logger.error("FALLO      [%s/%s]  %s  ->  %s.%s  (%.1f s)",
+                             n_job, total_jobs,
+                             os.path.basename(ruta.rstrip("/")),
+                             esquema, tabla, segundos)
+                logger.error("   %s", exc)
                 con_error.append(destino_nombre)
     finally:
         try:

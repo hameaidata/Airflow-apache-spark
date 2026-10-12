@@ -27,12 +27,14 @@ import re
 from pathlib import Path
 
 import pytest
+
+from raiz_repo import DIR_AIRFLOW  # noqa: E402
 from airflow.models import DagBag, Variable
 
 
 RAIZ = Path(__file__).resolve().parents[3]
-DIR_DAGS = RAIZ / "airflow" / "dags"
-DIR_JSON = RAIZ / "airflow" / "config" / "json"
+DIR_DAGS = DIR_AIRFLOW / "dags"
+DIR_JSON = DIR_AIRFLOW / "config" / "json"
 
 # Reglas reales de airflow/utils/helpers.py
 RE_TASK_ID = re.compile(r"^[\w.-]+$")
@@ -161,13 +163,26 @@ def test_sin_ciclos(dagbag):
 
 
 def test_toda_tarea_tiene_timeout(dagbag):
-    """Una tarea sin timeout puede quedarse colgada indefinidamente."""
+    """Una tarea sin timeout puede quedarse colgada indefinidamente.
+
+    La exencion es por TIPO y no por una lista de nombres, y la diferencia
+    importa. Un EmptyOperator no ejecuta nada: no puede colgarse, asi que
+    exigirle un timeout solo obliga a inventar un numero sin sentido. Con una
+    lista de nombres, en cambio, la forma facil de callar este test es agregar
+    la tarea a la lista -que es exactamente lo que no debe poder hacerse-.
+
+    Antes la lista decia ("inicio", "fin", "ods_completo", "bds_completo"), y
+    con eso el `fin` de BDS_DATAHUB_PROCESOS quedo exento al convertirse en un
+    PythonOperator que resume la corrida. Si ese resumen se cuelga consultando
+    la base, la tarea se queda ahi para siempre. Por tipo, eso no pasa.
+    """
+    from airflow.operators.empty import EmptyOperator
+
     sin_timeout = [
         f"{dag_id}.{t.task_id}"
         for dag_id in dagbag.dag_ids
         for t in dagbag.get_dag(dag_id).tasks
-        if t.execution_timeout is None and t.task_id not in ("inicio", "fin",
-                                                             "ods_completo", "bds_completo")
+        if t.execution_timeout is None and not isinstance(t, EmptyOperator)
     ]
     assert not sin_timeout, f"Tareas sin execution_timeout: {sin_timeout}"
 

@@ -145,7 +145,7 @@ COMPOSE_PROJECT_NAME=airflow-spark
 #   docker build -t spark-bsg:3.5.3 -f spark/Dockerfile .
 AIRFLOW_IMAGE_TAG=2.11.2-python3.11
 AIRFLOW_IMAGE=airflow-bsg:2.11.2
-SPARK_IMAGE_TAG=3.5.3
+SPARK_IMAGE_TAG=3.5.3-scala2.12-java17-python3-ubuntu
 SPARK_IMAGE=spark-bsg:3.5.3
 POSTGRES_IMAGE_TAG=16-alpine
 REDIS_IMAGE_TAG=7-alpine
@@ -250,6 +250,7 @@ BT2SQL_PARQUET_HOST_DIR=C:/datahub/bt2sql
 # ningun efecto, sin dar tampoco ningun error.
 AIRFLOW_POOL_SINGLESTORE=default_pool
 AIRFLOW_POOL_SQLSERVER=default_pool
+AIRFLOW_POOL_SPARK=default_pool
 
 # --- Escalado ---------------------------------------------------------------
 # Capacidad total = replicas x WORKER_CONCURRENCY

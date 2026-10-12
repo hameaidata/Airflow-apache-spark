@@ -35,11 +35,13 @@ from pathlib import Path
 
 import pytest
 
+from raiz_repo import DIR_AIRFLOW  # noqa: E402
+
 
 RAIZ = Path(__file__).resolve().parents[3]
-DIR_DAGS = RAIZ / "airflow" / "dags"
+DIR_DAGS = DIR_AIRFLOW / "dags"
 DIR_PRODUCCION = DIR_DAGS / "production"
-DIR_JSON = RAIZ / "airflow" / "config" / "json"
+DIR_JSON = DIR_AIRFLOW / "config" / "json"
 
 DAG_ID = "BDS_DATAHUB_PROCESOS"
 ARCHIVO_DAG = DIR_PRODUCCION / "dag_bds_datahub_procesos.py"
@@ -267,8 +269,13 @@ def test_cada_bds_cuelga_de_su_propia_tabla_de_ods(plan_ejemplo):
     assert (11, 21) in aristas, "bds_procesos no cuelga de ods_procesos"
     assert (12, 22) in aristas, "bds_operaciones no cuelga de ods_operaciones"
     assert not [a for a in aristas if a[0] == "ods_completo"], (
-        "alguna tabla BDS sigue colgando de ods_completo en bloque: un fallo en "
-        "cualquier tabla ODS volveria a afectarla")
+        "alguna tabla BDS cuelga de ods_completo ademas de su propia "
+        "dependencia.\n"
+        "Ojo con el motivo, porque es facil equivocarse: NO la bloquearia "
+        "-ods_completo lleva all_done y siempre termina en exito-. Lo que haria "
+        "es obligarla a ESPERAR a toda la capa ODS, incluidas tablas con las que "
+        "no tiene ninguna relacion. bds_modulos arranca en cuanto termina "
+        "ods_modulos, no cuando termina ods_operaciones.")
 
 
 def test_la_cadena_entre_tablas_bds_se_respeta(plan_ejemplo):

@@ -12,7 +12,30 @@
 # Usar:  en el .env  ->  SPARK_IMAGE=spark-bsg:3.5.3
 # ============================================================================
 
-ARG SPARK_BASE=apache/spark:3.5.3
+# JAVA 17, Y LA ETIQUETA COMPLETA NO ES UN CAPRICHO.
+#
+# El driver corre en client mode DENTRO de airflow-worker, con la imagen de
+# Airflow, que instala openjdk-17 (Dockerfile:31). Los executors corren aqui.
+# Spark exige la MISMA version mayor de Java en los dos lados: Kryo serializa
+# clases internas del JDK, y Java 11 y 17 las encapsulan distinto.
+#
+# La etiqueta "apache/spark:3.5.3" a secas trae Java 11, y el desajuste no
+# falla al arrancar: el executor termina su tarea, manda el resultado, y el
+# driver no puede leerlo. Sale como
+#     java.io.EOFException
+#       at KryoDeserializationStream.readObject
+# en el log del DRIVER, sin un solo error en el del executor, que dice
+# "Finished task ... bytes result sent to driver". El mensaje no menciona Java
+# por ningun lado. Costo una tarde encontrarlo.
+#
+# La variante -python3- ademas trae python3 en los executors. Hoy no hace
+# falta -las operaciones de DataFrame corren en Catalyst- pero el dia que se
+# use una UDF de Python, los executors la necesitan.
+#
+# Si cambia esta etiqueta, el Java de aqui y el del Dockerfile principal
+# tienen que seguir coincidiendo. Hay un test que lo comprueba:
+# airflow/tests/unit/test_drivers_jdbc.py
+ARG SPARK_BASE=apache/spark:3.5.3-scala2.12-java17-python3-ubuntu
 FROM ${SPARK_BASE}
 
 USER root

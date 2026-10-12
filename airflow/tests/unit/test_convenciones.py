@@ -23,9 +23,11 @@ from pathlib import Path
 
 import pytest
 
+from raiz_repo import DIR_AIRFLOW  # noqa: E402
+
 
 RAIZ = Path(__file__).resolve().parents[3]
-DIR_RAIZ_DAGS = RAIZ / "airflow" / "dags"
+DIR_RAIZ_DAGS = DIR_AIRFLOW / "dags"
 DIR_DAGS = DIR_RAIZ_DAGS / "production"
 
 # ============================================================================
@@ -400,7 +402,7 @@ def test_las_conexiones_nuevas_declaran_quien_las_abre():
     }
     patron = re.compile(r'conn_id[^=]*=\s*"([^"]+)"')
     malas = set()
-    for archivo in sorted((RAIZ / "airflow" / "dags").rglob("*.py")):
+    for archivo in sorted((DIR_AIRFLOW / "dags").rglob("*.py")):
         for conn in patron.findall(archivo.read_text(encoding="utf-8", errors="replace")):
             if conn in conocidas_legado or conn.startswith(("AF_", "SPK_")):
                 continue
@@ -423,7 +425,7 @@ def test_spark_no_recibe_credenciales_por_configuracion():
     variables de entorno.
     """
     malos = []
-    for archivo in sorted((RAIZ / "airflow").rglob("*.py")):
+    for archivo in sorted((DIR_AIRFLOW).rglob("*.py")):
         if archivo.name in SCRIPTS_A_MOVER:
             continue
         # Los propios tests nombran el patron que persiguen. Sin esta linea,
@@ -461,7 +463,7 @@ def test_ningun_paquete_de_plugins_tapa_la_biblioteca_estandar():
     """
     import sys
 
-    carpeta = RAIZ / "airflow" / "plugins"
+    carpeta = DIR_AIRFLOW / "plugins"
     estandar = set(sys.stdlib_module_names)
     choques = sorted(
         d.name for d in carpeta.iterdir()
@@ -474,3 +476,182 @@ def test_ningun_paquete_de_plugins_tapa_la_biblioteca_estandar():
         f"proceso que ponga plugins/ al principio de sys.path importara estos "
         f"en vez del estandar, y el error no mencionara plugins/ por ningun lado."
     )
+
+
+# ============================================================================
+# sys.path: el import de un paquete hermano
+# ============================================================================
+#
+# Airflow pone dags/ en sys.path pero NO dags/production/. Los DAGs que
+# importan un paquete que vive a su lado -etl_bt2sql, etl_s2sql- tienen que
+# agregar su PROPIA carpeta, y los dos errores posibles se ven igual de bien
+# en una revision rapida:
+#
+#   parents[1] en vez de parents[0]  -> agrega dags/, que ya estaba. La linea
+#       parece correcta, no da ningun error, y el DAG sigue fallando con
+#       ModuleNotFoundError en su primera tarea.
+#   insert(0) en vez de append       -> funciona, hasta el dia que alguien cree
+#       un json.py o un logging.py en esa carpeta y se rompa el interprete.
+#       En este proyecto ya paso con plugins/logging/.
+#
+# Los dos estuvieron en dag_stg_bt2sql_carga_spark.py a la vez.
+PAQUETES_HERMANOS = ("etl_bt2sql", "etl_s2sql")
+
+
+def _dags_que_importan_un_hermano():
+    for archivo in sorted(DIR_DAGS.glob("dag_*.py")):
+        texto = archivo.read_text(encoding="utf-8")
+        if any(f"from {p}." in texto or f"import {p}" in texto
+               for p in PAQUETES_HERMANOS):
+            yield archivo, texto
+
+
+def test_hay_dags_que_importan_un_paquete_hermano():
+    """Si esta lista queda vacia, los dos tests de abajo no prueban nada."""
+    encontrados = [a.name for a, _ in _dags_que_importan_un_hermano()]
+    assert encontrados, (
+        "ningun DAG importa etl_bt2sql ni etl_s2sql; si se reorganizo el "
+        "proyecto, estos tests sobran o hay que actualizar PAQUETES_HERMANOS")
+
+
+def test_el_dag_agrega_su_propia_carpeta_y_no_la_de_arriba():
+    """La carpeta que se agrega tiene que ser la que CONTIENE el paquete."""
+    malos = []
+    for archivo, texto in _dags_que_importan_un_hermano():
+        hermanos = [p for p in PAQUETES_HERMANOS
+                    if (archivo.parent / p / "__init__.py").is_file()
+                    and (f"from {p}." in texto or f"import {p}" in texto)]
+        if not hermanos:
+            continue
+
+        # Se mira QUE se le pasa a sys.path, no si el texto menciona
+        # parents[1] en algun sitio. La primera version de este test buscaba
+        # "parents[1]" en todo el archivo, y daba el diagnostico equivocado
+        # cuando el bloque faltaba por completo pero parents[1] aparecia en
+        # otra funcion: decia "agrega una carpeta de arriba" donde en realidad
+        # no agregaba ninguna. Un mensaje de error que apunta al sitio
+        # equivocado cuesta mas que no tenerlo.
+        agregados = re.findall(r"sys\.path\.(?:append|insert)\(\s*(?:0\s*,\s*)?([^)]+)\)",
+                               texto)
+        # Las variables se resuelven buscando su asignacion en el archivo.
+        resueltos = []
+        for arg in agregados:
+            arg = arg.strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", arg):
+                m = re.search(rf"^{re.escape(arg)}\s*=\s*(.+)$", texto, re.M)
+                arg = m.group(1).strip() if m else arg
+            resueltos.append(arg)
+
+        FORMAS_PROPIAS = ("os.path.dirname(os.path.abspath(__file__))",
+                          "Path(__file__).resolve().parent)",
+                          "Path(__file__).resolve().parents[0]",
+                          "os.path.dirname(__file__)")
+        propia = any(any(f in r for f in FORMAS_PROPIAS) for r in resueltos)
+
+        if not propia:
+            if not resueltos:
+                motivo = "no agrega ninguna carpeta a sys.path"
+            else:
+                motivo = ("agrega una carpeta que no es la suya: "
+                          + "; ".join(resueltos)
+                          + ". Tiene que ser la propia (parents[0] / "
+                            "os.path.dirname(__file__))")
+            malos.append(f"{archivo.name}: importa {', '.join(hermanos)} pero {motivo}")
+    assert not malos, (
+        "Airflow pone dags/ en sys.path, no dags/production/. Estos DAGs "
+        "fallaran con ModuleNotFoundError al ejecutar la tarea -no al "
+        "parsear-:\n  " + "\n  ".join(malos))
+
+
+def test_el_dag_usa_append_y_no_insert_en_sys_path():
+    """insert(0) pone la carpeta del DAG por delante de la biblioteca estandar.
+
+    No es teorico: en este proyecto una carpeta vacia plugins/logging/ dejo a
+    Airflow sin el modulo logging, con un AttributeError que no mencionaba ni
+    la carpeta ni sys.path.
+    """
+    malos = []
+    for archivo in sorted(DIR_DAGS.glob("*.py")):
+        for n, linea in enumerate(archivo.read_text(encoding="utf-8").splitlines(), 1):
+            if "sys.path.insert" in linea and not linea.strip().startswith("#"):
+                malos.append(f"{archivo.name}:{n}  {linea.strip()}")
+    assert not malos, (
+        "sys.path.insert(0, ...) tapa la biblioteca estandar. Use "
+        "sys.path.append:\n  " + "\n  ".join(malos))
+
+
+# ============================================================================
+# jaydebeapi devuelve java.lang.String, no str
+# ============================================================================
+#
+# El puente de jaydebeapi es JPype, y por ahi los nombres de columna de
+# cur.description llegan como java.lang.String. Ese objeto NO tiene .upper()
+# ni .lower() ni .strip(), asi que
+#
+#     columnas = [d[0].upper() for d in cur.description]
+#
+# revienta con
+#     AttributeError: 'java.lang.String' object has no attribute 'upper'
+#
+# y el mensaje no menciona ni JDBC ni JPype. Costo dos tareas del DAG
+# descubrirlo: la segunda aparicion esperaba en verificar_parquet, dos pasos
+# despues de la que fallo.
+#
+# La regla del proyecto es envolver en str() todo lo que sale de un cursor.
+# El job de Spark queda fuera a proposito: pasa por py4j (spark._jvm), que si
+# convierte a str de Python.
+METODOS_DE_CADENA = ("upper", "lower", "strip", "lstrip", "rstrip",
+                     "replace", "split", "title", "casefold")
+
+
+def _llama_metodo_de_cadena_sin_str(linea: str) -> str | None:
+    """Devuelve el metodo si la linea lo llama sobre algo sin envolver."""
+    for metodo in METODOS_DE_CADENA:
+        # d[0].upper()  /  col[0].strip()  ->  sospechoso
+        # str(d[0]).upper()                ->  correcto
+        if re.search(rf"\]\s*\.{metodo}\(", linea) and "str(" not in linea:
+            return metodo
+    return None
+
+
+def test_los_nombres_de_columna_de_jaydebeapi_se_envuelven_en_str():
+    """Cualquier `cur.description` leido por el lado de Airflow.
+
+    Se buscan las lineas que recorren un .description y llaman un metodo de
+    cadena sobre el elemento sin pasar por str().
+    """
+    malos = []
+    for archivo in sorted(DIR_DAGS.rglob("*.py")):
+        # singlestoredb devuelve str de Python; esa carpeta no usa jaydebeapi.
+        if "etl-datahub" in archivo.parts:
+            continue
+        for n, linea in enumerate(archivo.read_text(encoding="utf-8").splitlines(), 1):
+            if ".description" not in linea or linea.strip().startswith("#"):
+                continue
+            metodo = _llama_metodo_de_cadena_sin_str(linea)
+            if metodo:
+                malos.append(f"{archivo.name}:{n}  .{metodo}() sin str()  ->  {linea.strip()}")
+
+    assert not malos, (
+        "jaydebeapi devuelve los nombres de columna como java.lang.String, que "
+        "no tiene metodos de cadena. Envuelva en str():\n  "
+        + "\n  ".join(malos))
+
+
+def test_el_job_de_spark_no_necesita_la_envoltura():
+    """Lo que da sentido a la excepcion de arriba: el job lee las columnas por
+    py4j y no por JPype, y ahi si llegan como str de Python.
+
+    Si algun dia el job pasara a usar jaydebeapi, esta comprobacion falla y
+    avisa de que la regla empieza a aplicarle.
+    """
+    job = DIR_AIRFLOW.parent / "spark" / "jobs" / "etl" / "bt2sql_extraccion_spark.py"
+    if not job.is_file():
+        pytest.skip("el job de Spark no esta en este arbol")
+
+    fuente = job.read_text(encoding="utf-8")
+    assert "spark._jvm" in fuente, (
+        "el job de Spark ya no abre JDBC por py4j. Si paso a jaydebeapi, los "
+        "nombres de columna llegan como java.lang.String y hay que envolverlos "
+        "en str() igual que en el DAG.")
+    assert "import jaydebeapi" not in fuente

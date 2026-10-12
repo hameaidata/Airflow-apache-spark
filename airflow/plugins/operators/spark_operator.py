@@ -22,6 +22,7 @@ from utils.spark_config import (
     jdbc_url,
     merge_conf,
     merge_csv_values,
+    motor_de_conexion,
     spark_app_path,
 )
 
@@ -134,6 +135,35 @@ class BsgSparkSubmitOperator(SparkSubmitOperator):
                 "Este operador requiere apache-airflow-providers-apache-spark. "
                 "Construya la imagen personalizada del proyecto antes de ejecutar jobs Spark."
             )
+
+        # TODO ARGUMENTO A CADENA, Y NO ES PARANOIA.
+        #
+        # El provider de Spark agrega application_args al comando TAL CUAL y
+        # despues hace " ".join(...) para registrarlo. Un argumento que no sea
+        # str revienta ahi con un mensaje que no menciona ni el argumento ni la
+        # tarea:
+        #     TypeError: sequence item 31: expected str instance, int found
+        #
+        # Y llegar a un int es facil. Los DAGs de este proyecto usan
+        # render_template_as_native_obj=True -hace falta: sin el,
+        # "{{ ti.xcom_pull(...) }}" entrega la CADENA 'None' cuando no hay XCom
+        # y la carga sale verde sin subir nada-. Con esa opcion Jinja aplica
+        # literal_eval al texto renderizado, asi que un batch_id como
+        # "20261011144216" se convierte en el ENTERO 20261011144216.
+        #
+        # El filtro | string no lo arregla: literal_eval corre sobre el texto
+        # final de todas formas. Y quitar el render nativo reintroduce el fallo
+        # silencioso. El sitio correcto es aqui, una vez renderizado: una linea
+        # de comandos solo transporta cadenas, asi que convertir es lo fiel.
+        #
+        # None se descarta en vez de convertirse: un "None" literal en la linea
+        # de comandos llegaria al job como la cadena 'None' y es el mismo fallo
+        # silencioso por la puerta de atras.
+        if self.application_args:
+            self.application_args = [
+                str(a) for a in self.application_args if a is not None
+            ]
+
         return super().execute(context)
 
 
@@ -208,16 +238,61 @@ class BsgSparkJdbcOperator(BsgSparkSubmitOperator):
 
         self.application_args = app_args
         self.jars = merge_csv_values(self.jars, driver.jar)
+
+        # EL DRIVER EN CLIENT MODE NECESITA EL JAR EN SU CLASSPATH, Y --jars NO
+        # SE LO DA.
+        #
+        # Los jars JDBC se instalan dentro de las imagenes a proposito, para
+        # estar en el classpath "sin --jars y sin extraClassPath". Eso funciona
+        # para los EXECUTORS, que corren la imagen de Spark. El driver no: en
+        # client mode corre dentro de airflow-worker, con la imagen de Airflow,
+        # donde los jars viven en /opt/airflow/jars y NO estan en el classpath
+        # de la JVM.
+        #
+        # Y --jars no lo cubre. Distribuye a los executors y los agrega al
+        # classloader interno de Spark -por eso spark.read.jdbc() si funciona-,
+        # pero la JVM del driver ya esta arrancada cuando se procesan, asi que
+        # un jvm.Class.forName() va por el classloader del sistema y falla:
+        #     java.lang.ClassNotFoundException: com.microsoft.sqlserver.jdbc.SQLServerDriver
+        # con el log diciendo "Added JAR ... mssql-jdbc.jar" tres lineas antes.
+        #
+        # Los jobs de este proyecto abren conexiones de control con
+        # jvm.Class.forName (abrir_jdbc), no con spark.read.jdbc, asi que les
+        # pasa de lleno.
+        #
+        # Se APPENDEA a lo que ya hubiera en conf: si alguien declaro su propio
+        # extraClassPath en CONFIGURACION_SPARK, sobreescribirlo seria peor que
+        # el problema. El separador es ':' porque los contenedores son Linux.
+        if self.jars:
+            previo = (self.conf or {}).get("spark.driver.extraClassPath", "")
+            rutas = [r for r in previo.split(":") if r]
+            for jar in self.jars.split(","):
+                jar = jar.strip()
+                if jar and jar not in rutas:
+                    rutas.append(jar)
+            self.conf = {**(self.conf or {}),
+                         "spark.driver.extraClassPath": ":".join(rutas)}
         self.env_vars = {
             **dict(self.env_vars or {}),
             self.user_env: conn.login,
             self.password_env: conn.password,
         }
 
+        # Se registra el motor RESUELTO y no conn.conn_type. Con las
+        # Connections de tipo Generic de este proyecto, conn_type es literal
+        # "generic", asi que el log decia "motor=generic" mientras el driver
+        # que de verdad cargaba era el de SQL Server. Un log que contradice lo
+        # que hace el codigo cuesta mas que no tenerlo.
+        try:
+            motor = motor_de_conexion(conn)
+        except Exception:                                        # noqa: BLE001
+            motor = f"{conn.conn_type} (sin resolver)"
+
         self.log.info(
-            "Spark JDBC preparado | conn_id=%s motor=%s host=%s app=%s",
+            "Spark JDBC preparado | conn_id=%s motor=%s driver=%s host=%s app=%s",
             self.jdbc_conn_id,
-            conn.conn_type,
+            motor,
+            driver.driver_class.rsplit(".", 1)[-1],
             conn.host,
             self.application,
         )

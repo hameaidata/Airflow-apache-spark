@@ -28,11 +28,13 @@ from pathlib import Path
 
 import pytest
 
+from raiz_repo import DIR_AIRFLOW  # noqa: E402
+
 
 RAIZ = Path(__file__).resolve().parents[3]
-DIR_DAGS = RAIZ / "airflow" / "dags"
+DIR_DAGS = DIR_AIRFLOW / "dags"
 DIR_PRODUCCION = DIR_DAGS / "production"
-DIR_JSON = RAIZ / "airflow" / "config" / "json"
+DIR_JSON = DIR_AIRFLOW / "config" / "json"
 
 if str(DIR_PRODUCCION) not in sys.path:
     sys.path.append(str(DIR_PRODUCCION))

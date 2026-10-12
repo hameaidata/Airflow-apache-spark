@@ -15,6 +15,19 @@ esta. Duplicar la lista esta bien; que diverja en silencio, no.
 
 Ejecucion:
     docker compose exec airflow-scheduler pytest /opt/airflow/tests/unit/test_drivers_jdbc.py -v
+
+DONDE EJECUTARLOS
+-----------------
+La suite tiene dos clases de test y no corren igual en los dos sitios:
+
+    pytest airflow/tests/unit -q                 <- DESDE EL REPOSITORIO: todos
+    docker compose exec -T airflow-scheduler \
+        pytest /opt/airflow/tests/unit -q        <- en el contenedor: los que
+                                                    necesitan Airflow instalado
+
+Los que auditan archivos de la raiz (docker-compose*.yml, setup.sh, sql/) se
+SALTAN en el contenedor con un motivo explicito, porque esa carpeta no esta
+montada ahi. Ver airflow/tests/unit/raiz_repo.py.
 """
 
 from __future__ import annotations
@@ -26,10 +39,10 @@ from pathlib import Path
 import pytest
 
 
-RAIZ = Path(__file__).resolve().parents[3]
+from raiz_repo import DIR_AIRFLOW, RAIZ, requiere_repo  # noqa: E402
 DOCKERFILE_AIRFLOW = RAIZ / "Dockerfile"
 DOCKERFILE_SPARK = RAIZ / "spark" / "Dockerfile"
-DIR_PLUGINS = RAIZ / "airflow" / "plugins"
+DIR_PLUGINS = DIR_AIRFLOW / "plugins"
 
 if str(DIR_PLUGINS) not in sys.path:
     sys.path.append(str(DIR_PLUGINS))
@@ -66,6 +79,7 @@ def drivers_spark():
 
 
 # ============================================================================
+@requiere_repo
 def test_las_dos_imagenes_traen_los_mismos_drivers(drivers_airflow, drivers_spark):
     """El fallo que evita: un job que arranca bien y muere en el executor con
     'No suitable driver', porque el jar solo estaba en la imagen de Airflow."""
@@ -84,6 +98,7 @@ def test_las_dos_imagenes_traen_los_mismos_drivers(drivers_airflow, drivers_spar
     )
 
 
+@requiere_repo
 def test_las_versiones_coinciden_entre_las_dos_imagenes(drivers_airflow, drivers_spark):
     """Mismo jar con version distinta en driver y executor produce errores de
     serializacion o de protocolo que no mencionan la version por ningun lado."""
@@ -104,6 +119,7 @@ def test_el_driver_de_bantotal_esta_declarado(drivers_airflow):
     )
 
 
+@requiere_repo
 def test_el_catalogo_del_codigo_no_promete_jars_inexistentes(drivers_airflow):
     """Cada driver marcado como descargado=True tiene que corresponder con un
     jar que el Dockerfile trae de verdad. Si no, el error sale recien al
@@ -269,9 +285,10 @@ def test_el_history_server_limpia_los_eventos_viejos():
 # ============================================================================
 # Jars propios (airflow/jars/)
 # ============================================================================
-DIR_JARS_PROPIOS = RAIZ / "airflow" / "jars"
+DIR_JARS_PROPIOS = DIR_AIRFLOW / "jars"
 
 
+@requiere_repo
 def test_la_carpeta_de_jars_propios_existe_y_no_rompe_el_build():
     """La COPY de airflow/jars/ falla si la carpeta no existe. El .gitkeep es
     lo unico que garantiza que este ahi incluso sin ningun jar dentro."""
@@ -319,6 +336,7 @@ def test_los_jars_propios_se_copian_despues_de_descargar():
         )
 
 
+@requiere_repo
 def test_no_hay_dos_versiones_del_mismo_driver(drivers_airflow):
     """Dos versiones del mismo driver en el classpath: cual gana depende del
     orden del classloader, que no esta definido. El caso tipico es dejar
@@ -342,3 +360,89 @@ def test_no_hay_dos_versiones_del_mismo_driver(drivers_airflow):
         f"Para fijar una version, use el MISMO nombre de archivo que el "
         f"descargado para reemplazarlo, en vez de anadir un segundo."
     )
+
+
+# ============================================================================
+# El Java del driver y el de los executors
+# ============================================================================
+#
+# Spark exige la MISMA version mayor de Java en driver y executors: Kryo
+# serializa clases internas del JDK y Java 11 y 17 las encapsulan distinto.
+#
+# El desajuste NO falla al arrancar, y ahi esta lo caro. El executor termina su
+# tarea y manda el resultado -su log dice "Finished task ... bytes result sent
+# to driver", sin un solo error-; el driver no puede leerlo y lanza
+#     java.io.EOFException
+#       at KryoDeserializationStream.readObject
+# sin mencionar Java por ningun lado.
+#
+# El driver corre en client mode dentro de airflow-worker, con la imagen de
+# Airflow; los executors con la de Spark. Nadie eligio que divergieran: cada
+# imagen tomo el Java de su base. Este test convierte esa deriva en un fallo
+# de CI, igual que los de arriba hacen con los drivers JDBC.
+import re as _re
+
+
+def _java_de_la_imagen_de_airflow() -> int:
+    texto = (RAIZ / "Dockerfile").read_text(encoding="utf-8")
+    # openjdk-17-jre-headless / openjdk-17-jdk ...  (no el Temurin secundario)
+    versiones = {int(m) for m in _re.findall(r"openjdk-(\d+)-(?:jre|jdk)", texto)}
+    assert versiones, "no se encontro ningun openjdk-NN en el Dockerfile principal"
+    assert len(versiones) == 1, (
+        f"el Dockerfile principal instala varios openjdk como JVM principal: "
+        f"{sorted(versiones)}. Si uno es secundario -como el Temurin 8 para "
+        f"drivers .jre8- no debe declararse con el patron openjdk-NN.")
+    return versiones.pop()
+
+
+def _java_de_la_imagen_de_spark() -> int:
+    texto = (RAIZ / "spark" / "Dockerfile").read_text(encoding="utf-8")
+    m = _re.search(r"^ARG SPARK_BASE=(\S+)", texto, _re.M)
+    assert m, "spark/Dockerfile ya no declara ARG SPARK_BASE"
+    etiqueta = m.group(1)
+
+    java = _re.search(r"java(\d+)", etiqueta)
+    assert java, (
+        f"la etiqueta base de Spark no dice que Java trae: {etiqueta!r}.\n"
+        f"Las etiquetas cortas como 'apache/spark:3.5.3' traen Java 11 sin "
+        f"decirlo, y si el driver va con otra el job falla con un "
+        f"EOFException de Kryo que no menciona Java. Use la etiqueta completa, "
+        f"por ejemplo apache/spark:3.5.3-scala2.12-java17-python3-ubuntu.")
+    return int(java.group(1))
+
+
+@requiere_repo
+def test_el_java_del_driver_y_el_de_los_executors_coinciden():
+    """La comprobacion principal. Si estos dos numeros divergen, cualquier job
+    que devuelva resultados al driver muere al deserializarlos."""
+    airflow = _java_de_la_imagen_de_airflow()
+    spark = _java_de_la_imagen_de_spark()
+    assert airflow == spark, (
+        f"El driver corre Java {airflow} (imagen de Airflow) y los executors "
+        f"Java {spark} (imagen de Spark). Spark exige la misma version mayor "
+        f"en los dos lados.\n"
+        f"Arreglelo en uno de los dos sitios:\n"
+        f"  Dockerfile            -> openjdk-NN-jre-headless\n"
+        f"  spark/Dockerfile      -> ARG SPARK_BASE=...-javaNN-...")
+
+
+@requiere_repo
+def test_la_base_de_spark_declara_su_java_en_la_etiqueta():
+    """Una etiqueta corta como 'apache/spark:3.5.3' trae Java 11 sin decirlo.
+
+    Separado del test anterior a proposito: si alguien vuelve a la etiqueta
+    corta, el mensaje tiene que explicar QUE esta mal, no solo que los numeros
+    no cuadran -porque con la etiqueta corta no hay numero que comparar-.
+    """
+    _java_de_la_imagen_de_spark()
+
+
+@requiere_repo
+def test_los_executors_traen_python3():
+    """No hace falta para operaciones de DataFrame, que corren en Catalyst,
+    pero si para cualquier UDF de Python. Y la etiqueta corta no lo trae."""
+    texto = (RAIZ / "spark" / "Dockerfile").read_text(encoding="utf-8")
+    m = _re.search(r"^ARG SPARK_BASE=(\S+)", texto, _re.M)
+    assert m and "python3" in m.group(1), (
+        "la base de Spark no es una variante -python3-: una UDF de Python "
+        "fallaria en los executors con 'Cannot run program python3'")

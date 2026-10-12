@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -189,7 +190,122 @@ def filtrar_procesos(catalogo: list[dict], config: dict[str, Any],
     return sorted(seleccion, key=lambda f: (f["_prioridad"], str(f["TABLA"])))
 
 
-def construir_select(fila: dict[str, Any]) -> str:
+# ---------------------------------------------------------------------------
+# LAS MARCAS DEL FILTRO
+# ---------------------------------------------------------------------------
+# Mismo bloque que en spark/jobs/etl/bt2sql_extraccion_spark.py, y a proposito:
+# los dos pipelines tienen que entender el MISMO filtro, porque el catalogo y
+# la Variable son los mismos para los dos. Si solo uno supiera resolver las
+# marcas, una tabla filtrada por fecha traeria un dia distinto segun por que
+# pipeline pasara, y eso no se descubre mirando: se descubre cuadrando saldos.
+#
+# Hay un test (test_los_dos_pipelines_resuelven_igual_las_marcas) que compara
+# las dos salidas y falla si divergen. Mismo criterio que la lista de drivers
+# JDBC de los dos Dockerfile: duplicar esta bien mientras no pueda pasar en
+# silencio.
+#
+#     FILTRO = "FSH005FEC = {FECHA_AAAAMMDD}"    ->  WHERE FSH005FEC = 20261010
+#
+#   {FECHA_AAAAMMDD}  20261010      sin comillas, para las fechas DECIMAL(8,0)
+#                                   de Bantotal
+#   {FECHA_ISO}       '2026-10-10'  con comillas, para columnas DATE
+#   {FECHA_AAAAMM}    202610        tablas mensuales
+#   {FECHA_AAAA}      2026          tablas anuales
+#   {BATCH_ID}        '2026...'     con comillas
+#
+# Las de fecha admiten desplazamiento en dias: {FECHA_AAAAMMDD-6}.
+#
+# La fecha es la que sale de GPPPBTDB.FST017 (campo PGFCIE), la misma que va a
+# la columna FECHA_PROCESO y a la subcarpeta del dia. Asi las tres no pueden
+# desalinearse.
+MARCAS_FILTRO = re.compile(r"\{([A-Z][A-Z0-9_]*)(?:\s*([+-])\s*(\d{1,4}))?\}")
+
+# Lo que PARECE una marca y no se sustituyo. No se busca "{" a secas porque
+# JDBC y ODBC tienen literales de fecha con llaves -{d '2026-01-01'}- que son
+# SQL legitimo; este patron no los toca porque llevan comilla y espacio.
+RESTO_DE_MARCA = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*(?:\s*[+-]\s*\d+)?\}")
+
+# El batch_id acaba DENTRO de una cadena SQL, asi que se comprueba antes.
+BATCH_SEGURO = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+
+MARCAS_VALIDAS = ("FECHA_AAAAMMDD", "FECHA_ISO", "FECHA_AAAAMM",
+                  "FECHA_AAAA", "BATCH_ID")
+
+
+def sustituir_marcas(filtro: str, tabla: str, fecha_proceso: date | None = None,
+                     batch_id: str | None = None) -> str:
+    """Resuelve las marcas de un FILTRO. Sin marcas, lo devuelve intacto.
+
+    Una marca desconocida es un ERROR y no se deja pasar literal: contra
+    SQL Server daria un error de sintaxis oscuro, y contra DB2 for i hay
+    sintaxis donde una llave no revienta y el WHERE acaba significando otra
+    cosa, que es peor.
+
+    ESTO NO SANEA EL FILTRO. FILTRO sigue siendo SQL libre concatenado: quien
+    pueda editarlo puede consultar cualquier cosa del origen. Lo unico que
+    anaden las marcas son valores que calcula el propio proceso.
+    """
+    if not filtro or "{" not in filtro:
+        return filtro
+
+    def una(m) -> str:
+        nombre, signo, cantidad = m.group(1), m.group(2), m.group(3)
+
+        if nombre not in MARCAS_VALIDAS:
+            raise AirflowException(
+                f"[{tabla}] FILTRO usa una marca que no existe: "
+                f"{{{nombre}}}.\nLas que hay son: "
+                + ", ".join("{" + x + "}" for x in MARCAS_VALIDAS)
+                + "\nLas de fecha admiten un desplazamiento en dias, "
+                  "por ejemplo {FECHA_AAAAMMDD-6}.")
+
+        if nombre == "BATCH_ID":
+            if signo:
+                raise AirflowException(
+                    f"[{tabla}] FILTRO aplica un desplazamiento a "
+                    f"{{BATCH_ID}}, y un batch_id no es una fecha.")
+            if batch_id is None:
+                raise AirflowException(
+                    f"[{tabla}] FILTRO usa {{BATCH_ID}} pero esta extraccion "
+                    f"no recibio batch_id.")
+            if not BATCH_SEGURO.match(str(batch_id)):
+                raise AirflowException(
+                    f"[{tabla}] el batch_id {batch_id!r} tiene caracteres que "
+                    f"no se admiten dentro de un FILTRO. Solo letras, digitos "
+                    f"y _, hasta 32.")
+            return f"'{batch_id}'"
+
+        if fecha_proceso is None:
+            raise AirflowException(
+                f"[{tabla}] FILTRO usa {{{nombre}}} pero esta extraccion no "
+                f"recibio la fecha de proceso. La lee sql_fecha de la "
+                f"Variable, de GPPPBTDB.FST017.")
+
+        dias = int(cantidad or 0) * (-1 if signo == "-" else 1)
+        f = fecha_proceso + timedelta(days=dias)
+
+        if nombre == "FECHA_AAAAMMDD":
+            return f"{f:%Y%m%d}"
+        if nombre == "FECHA_ISO":
+            return f"'{f:%Y-%m-%d}'"
+        if nombre == "FECHA_AAAAMM":
+            return f"{f:%Y%m}"
+        return f"{f:%Y}"                                  # FECHA_AAAA
+
+    resuelto = MARCAS_FILTRO.sub(una, filtro)
+
+    sobra = RESTO_DE_MARCA.search(resuelto)
+    if sobra:
+        raise AirflowException(
+            f"[{tabla}] FILTRO deja sin resolver {sobra.group(0)}. Las marcas "
+            f"van en MAYUSCULAS y sin espacios dentro de las llaves. "
+            f"Las que hay son: "
+            + ", ".join("{" + x + "}" for x in MARCAS_VALIDAS))
+    return resuelto
+
+
+def construir_select(fila: dict[str, Any], fecha_proceso: date | None = None,
+                     batch_id: str | None = None) -> str:
     """Arma el SELECT contra Bantotal.
 
     Los nombres van concatenados porque ningun motor los admite como parametro,
@@ -199,6 +315,8 @@ def construir_select(fila: dict[str, Any]) -> str:
     puede validar sin un parser, asi que se documenta como lo que es: una
     columna con permisos de escribir SQL contra el core. Quien pueda editar
     CTL_PARAMETROS_PARQUET puede consultar cualquier cosa del origen.
+
+    Las marcas de fecha las resuelve sustituir_marcas; ver su docstring.
     """
     esquema = validar_identificador(fila["ESQUEMA"], "CTL_PARAMETROS_PARQUET.ESQUEMA")
     tabla = validar_identificador(fila["TABLA"], "CTL_PARAMETROS_PARQUET.TABLA")
@@ -208,7 +326,7 @@ def construir_select(fila: dict[str, Any]) -> str:
     sql = f"SELECT {columnas} FROM {calificar(esquema, tabla)}"
     filtro = (fila.get("FILTRO") or "").strip()
     if filtro:
-        sql += f" WHERE {filtro}"
+        sql += f" WHERE {sustituir_marcas(filtro, tabla, fecha_proceso, batch_id)}"
     return sql
 
 
@@ -468,7 +586,7 @@ def extraer_tabla(fila: dict[str, Any], config: dict[str, Any], batch_id: str,
 
     try:
         os.makedirs(carpeta_de_tabla(config, fecha_proceso, tabla), exist_ok=True)
-        sql = construir_select(fila)
+        sql = construir_select(fila, fecha_proceso, batch_id)
         logger.info("[%s] %s", tabla, sql)
 
         conn_bt = conexion_bantotal(config)
