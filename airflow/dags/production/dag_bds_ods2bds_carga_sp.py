@@ -47,14 +47,31 @@ if DIR_ACTUAL not in sys.path:
     sys.path.append(DIR_ACTUAL)
 
 from etl_datahub_sql import catalogo as cat          # noqa: E402
-from etl_datahub_sql.ejecutar import ejecutar_sp, filas_de   # noqa: E402
+from etl_datahub_sql.ejecutar import (                       # noqa: E402
+    ejecutar_sp,
+    filas_de,
+    sp_faltantes,
+)
 
 logger = logging.getLogger(__name__)
 
-DAG_ID = "BDS_DATAHUB_SQLSERVER"
+DAG_ID = "BDS_ODS2BDS_CARGA_SP"
 VARIABLE = "DAG_BDS_TABLAS"
 VARIABLE_ODS = "DAG_ODS_TABLAS"
-CONN_DESTINO = os.environ.get("AIRFLOW_CONN_DATAHUB", "CONEXION_SQLSERVER")
+# La Connection la manda el CATALOGO, no una variable de entorno: cada capa
+# vive en su propia base y por tanto tiene su propia Connection. El
+# respaldo deja funcionar una instalacion que aun no lo declare.
+CONN_DESTINO = cat.conexion_de(VARIABLE, "CONEXION_BDS")
+
+# La conexion de ODS, SOLO para la compuerta.
+#
+# La compuerta cuenta filas de las tablas ODS, y con las capas en bases
+# separadas esas tablas NO existen en la base de BDS. Contarlas con
+# CONN_DESTINO devolveria "tabla ausente" para todas y la carga se
+# saltaria siempre -- en rosa, sin error, que es el peor modo de fallar.
+#
+# Este DAG solo LEE por esta conexion. Lo que escribe va por CONN_DESTINO.
+CONN_ODS = cat.conexion_de(VARIABLE_ODS, "CONEXION_ODS")
 POOL = os.environ.get("AIRFLOW_POOL_SQLSERVER", "sqlserver")
 
 PROCESOS = cat.procesos_de(VARIABLE)
@@ -109,6 +126,8 @@ def verificar_ods() -> bool:
     problemas distintos y mandan a buscar a sitios distintos.
     """
     requeridas = tablas_ods_requeridas()
+    logger.info("Se comprueba ODS por la Connection %s; se escribira en BDS "
+                "por %s.", CONN_ODS, CONN_DESTINO)
 
     if not requeridas:
         logger.warning(
@@ -120,7 +139,7 @@ def verificar_ods() -> bool:
 
     con_datos, vacias, ausentes = [], [], []
     for tabla, quienes in sorted(requeridas.items()):
-        n = filas_de(CONN_DESTINO, tabla)
+        n = filas_de(CONN_ODS, tabla)
         if n is None:
             ausentes.append(tabla)
             logger.error("  AUSENTE  %-40s  (la necesitan: %s)",
@@ -160,6 +179,57 @@ def inventario_procesos():
             logger.info("   %-40s  <- %s", tabla, ", ".join(quienes))
 
 
+def verificar_sp_declarados():
+    """Comprueba que TODO SP del catalogo exista en la base, antes de ejecutar.
+
+    POR QUE ES LA PRIMERA TAREA REAL DEL DAG
+    ----------------------------------------
+    El catalogo es una DECLARACION, no un inventario. Nombra procedimientos, y
+    que esten desplegados es otra cosa. Sin esta tarea, un SP ausente se
+    descubre proceso a proceso: cada tarea abre su conexion, escribe en la
+    bitacora, intenta el CALL y falla con "Invalid object name". Con veinte
+    procesos activos son veinte tareas en rojo diciendo lo mismo, y hay que
+    abrir veinte logs para enterarse de cuales faltan.
+
+    Aqui es UNA lista, antes de tocar nada.
+
+    Y FALLA, no se salta. Un procedimiento que el catalogo declara y la base no
+    tiene es un despliegue incompleto, no una tabla que hoy no entra. Saltarlo
+    dejaria la capa a medias sin que nada lo dijera.
+    """
+    from airflow.exceptions import AirflowException
+
+    existen, faltan = sp_faltantes(CONN_DESTINO, PROCESOS)
+
+    for p in existen:
+        logger.info("  OK     %-42s  %s", p.sp_calificado, p.nombre)
+    for p in faltan:
+        logger.error("  FALTA  %-42s  %s  (ID %s)",
+                     p.sp_calificado, p.nombre, p.id_proceso)
+
+    if faltan:
+        raise AirflowException(
+            f"{len(faltan)} de {len(PROCESOS)} procedimiento(s) que declara "
+            f"{VARIABLE} NO existen en la base:\n  "
+            + "\n  ".join(f"{p.sp_calificado}   (ID {p.id_proceso}, {p.nombre})"
+                          for p in faltan)
+            + f"\n\nTres causas posibles, por orden de probabilidad:\n"
+              f"  1. el procedimiento no esta desplegado. Ejecute su DDL en "
+              f"{CONN_DESTINO}.\n"
+              f"  2. esta desplegado en OTRO esquema. El catalogo lo busca en "
+              f"el que diga SCHEMA_DESTINO, o en dbo si STORED_PROCEDURE ya "
+              f"trae esquema.\n"
+              f"  3. el catalogo lo declara con otro nombre. Compare contra:\n"
+              f"     SELECT s.name, p.name FROM sys.procedures p "
+              f"JOIN sys.schemas s ON s.schema_id = p.schema_id;\n\n"
+              f"Si el procedimiento existe pero esta escrito para SingleStore "
+              f"-DELIMITER //, DECLARE ... DEFAULT-, SQL Server no lo acepta y "
+              f"hay que traducirlo a T-SQL primero.")
+
+    logger.info("Los %s procedimiento(s) declarados existen en la base.",
+                len(existen))
+
+
 def _sin_catalogo():
     from airflow.exceptions import AirflowException
     raise AirflowException(
@@ -192,6 +262,17 @@ with DAG(
         execution_timeout=timedelta(minutes=5),
     )
 
+    tarea_preflight = PythonOperator(
+        task_id="verificar_sp_declarados",
+        python_callable=verificar_sp_declarados,
+        retries=0,
+        execution_timeout=timedelta(minutes=10),
+        pool=POOL,
+        doc_md=("Comprueba en sys.procedures que todo SP del catalogo exista, "
+                "ANTES de la compuerta de datos. Un despliegue incompleto se "
+                "ve aqui y no veinte tareas mas tarde."),
+    )
+
     compuerta = ShortCircuitOperator(
         task_id="verificar_ods",
         python_callable=verificar_ods,
@@ -214,9 +295,9 @@ with DAG(
             retries=0,
             execution_timeout=timedelta(minutes=1),
         )
-        inicio >> tarea_inventario >> compuerta >> unica
+        inicio >> tarea_inventario >> tarea_preflight >> compuerta >> unica
     else:
-        inicio >> tarea_inventario >> compuerta
+        inicio >> tarea_inventario >> tarea_preflight >> compuerta
 
         grupo_anterior = None
         for orden in sorted({p.orden for p in PROCESOS}):

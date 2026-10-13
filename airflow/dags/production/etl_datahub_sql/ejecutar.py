@@ -181,3 +181,58 @@ def _registrar(conn_id: str, bitacora: str, sp: str, etiqueta: str,
             conn.close()
         except Exception:                                        # noqa: BLE001
             pass
+
+
+def sp_faltantes(conn_id: str, procesos: list) -> tuple[list, list]:
+    """Cuales de los SP declarados NO existen en la base. (existen, faltan).
+
+    POR QUE ESTA COMPROBACION ES LA MAS IMPORTANTE DE ESTE PIPELINE
+    ---------------------------------------------------------------
+    El catalogo (DAG_ODS_TABLAS / DAG_BDS_TABLAS) es una DECLARACION, no un
+    inventario: nombra 22 procedimientos, y que esten desplegados en la base es
+    otra cosa. El 2026-10-13 ninguno de esos 22 nombres existia como archivo en
+    sql/ del repositorio, y de los 11 que si existen, 8 estan escritos en
+    sintaxis de SingleStore -DELIMITER //, DECLARE ... DEFAULT- que SQL Server
+    no acepta.
+
+    Sin esta tarea, un SP ausente se descubre asi: la tarea del proceso falla
+    con "Invalid object name 'DATAHUB.SP_ODS_TIPO_CAMBIO'", a los veinte
+    segundos, despues de haber abierto una conexion y escrito en la bitacora.
+    Con veinte procesos activos son veinte tareas en rojo diciendo lo mismo, y
+    hay que abrir veinte logs para saber cuales faltan.
+
+    Con esta tarea es UNA lista, antes de tocar nada.
+
+    SE CONSULTA sys.procedures Y NO SE INTENTA EJECUTAR
+    --------------------------------------------------
+    Es la unica forma de preguntar "existe?" sin efectos. Un EXEC de prueba
+    ejecutaria el procedimiento, y estos escriben en tablas.
+
+    OBJECT_ID() seria mas corto pero devuelve NULL tanto si el objeto no existe
+    como si existe y el usuario no tiene permiso para verlo, y esos son dos
+    problemas distintos. sys.procedures al menos lista lo que SI hay, asi que
+    el mensaje puede decir que procedimientos encontro.
+    """
+    from etl_bt2sql.bt2sql_comun import conexion_sqlserver
+
+    conn = conexion_sqlserver({"conn_id_destino": conn_id})
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT LOWER(s.name) + '.' + LOWER(p.name) "
+            "FROM sys.procedures p "
+            "JOIN sys.schemas s ON s.schema_id = p.schema_id")
+        en_la_base = {str(f[0]) for f in cur.fetchall()}
+    finally:
+        conn.close()
+
+    existen, faltan = [], []
+    for p in procesos:
+        nombre = p.sp_calificado
+        # Un SP sin esquema se busca en dbo, que es donde SQL Server lo
+        # resolveria con el esquema por defecto de un login normal.
+        clave = nombre.lower() if "." in nombre else f"dbo.{nombre.lower()}"
+        (existen if clave in en_la_base else faltan).append(p)
+
+    logger.info("Procedimientos en la base: %s", len(en_la_base))
+    return existen, faltan

@@ -30,6 +30,7 @@ completa antes de arrancar. Esta pedida y no hecha.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from datetime import datetime, timedelta
@@ -49,11 +50,19 @@ if DIR_ACTUAL not in sys.path:
     sys.path.append(DIR_ACTUAL)
 
 from etl_datahub_sql import catalogo as cat          # noqa: E402
-from etl_datahub_sql.ejecutar import ejecutar_sp     # noqa: E402
+from etl_datahub_sql.ejecutar import (               # noqa: E402
+    ejecutar_sp,
+    sp_faltantes,
+)
 
-DAG_ID = "ODS_DATAHUB_SQLSERVER"
+logger = logging.getLogger(__name__)
+
+DAG_ID = "ODS_STG2ODS_CARGA_SP"
 VARIABLE = "DAG_ODS_TABLAS"
-CONN_DESTINO = os.environ.get("AIRFLOW_CONN_DATAHUB", "CONEXION_SQLSERVER")
+# La Connection la manda el CATALOGO, no una variable de entorno: cada capa
+# vive en su propia base y por tanto tiene su propia Connection. El
+# respaldo deja funcionar una instalacion que aun no lo declare.
+CONN_DESTINO = cat.conexion_de(VARIABLE, "CONEXION_ODS")
 POOL = os.environ.get("AIRFLOW_POOL_SQLSERVER", "sqlserver")
 
 PROCESOS = cat.procesos_de(VARIABLE)
@@ -61,8 +70,58 @@ BITACORA = cat.tabla_bitacora(VARIABLE)
 
 
 def inventario_procesos():
-    import logging
-    logging.getLogger(__name__).info("\n%s", cat.inventario(VARIABLE))
+    logger.info("\n%s", cat.inventario(VARIABLE))
+
+def verificar_sp_declarados():
+    """Comprueba que TODO SP del catalogo exista en la base, antes de ejecutar.
+
+    POR QUE ES LA PRIMERA TAREA REAL DEL DAG
+    ----------------------------------------
+    El catalogo es una DECLARACION, no un inventario. Nombra procedimientos, y
+    que esten desplegados es otra cosa. Sin esta tarea, un SP ausente se
+    descubre proceso a proceso: cada tarea abre su conexion, escribe en la
+    bitacora, intenta el CALL y falla con "Invalid object name". Con veinte
+    procesos activos son veinte tareas en rojo diciendo lo mismo, y hay que
+    abrir veinte logs para enterarse de cuales faltan.
+
+    Aqui es UNA lista, antes de tocar nada.
+
+    Y FALLA, no se salta. Un procedimiento que el catalogo declara y la base no
+    tiene es un despliegue incompleto, no una tabla que hoy no entra. Saltarlo
+    dejaria la capa a medias sin que nada lo dijera.
+    """
+    from airflow.exceptions import AirflowException
+
+    existen, faltan = sp_faltantes(CONN_DESTINO, PROCESOS)
+
+    for p in existen:
+        logger.info("  OK     %-42s  %s", p.sp_calificado, p.nombre)
+    for p in faltan:
+        logger.error("  FALTA  %-42s  %s  (ID %s)",
+                     p.sp_calificado, p.nombre, p.id_proceso)
+
+    if faltan:
+        raise AirflowException(
+            f"{len(faltan)} de {len(PROCESOS)} procedimiento(s) que declara "
+            f"{VARIABLE} NO existen en la base:\n  "
+            + "\n  ".join(f"{p.sp_calificado}   (ID {p.id_proceso}, {p.nombre})"
+                          for p in faltan)
+            + f"\n\nTres causas posibles, por orden de probabilidad:\n"
+              f"  1. el procedimiento no esta desplegado. Ejecute su DDL en "
+              f"{CONN_DESTINO}.\n"
+              f"  2. esta desplegado en OTRO esquema. El catalogo lo busca en "
+              f"el que diga SCHEMA_DESTINO, o en dbo si STORED_PROCEDURE ya "
+              f"trae esquema.\n"
+              f"  3. el catalogo lo declara con otro nombre. Compare contra:\n"
+              f"     SELECT s.name, p.name FROM sys.procedures p "
+              f"JOIN sys.schemas s ON s.schema_id = p.schema_id;\n\n"
+              f"Si el procedimiento existe pero esta escrito para SingleStore "
+              f"-DELIMITER //, DECLARE ... DEFAULT-, SQL Server no lo acepta y "
+              f"hay que traducirlo a T-SQL primero.")
+
+    logger.info("Los %s procedimiento(s) declarados existen en la base.",
+                len(existen))
+
 
 
 def _sin_catalogo():
@@ -104,7 +163,18 @@ with DAG(
                 "existe."),
     )
 
-    inicio >> tarea_inventario
+    tarea_preflight = PythonOperator(
+        task_id="verificar_sp_declarados",
+        python_callable=verificar_sp_declarados,
+        retries=0,
+        execution_timeout=timedelta(minutes=10),
+        pool=POOL,
+        doc_md=("Comprueba en sys.procedures que todo SP del catalogo exista, "
+                "ANTES de ejecutar ninguno. Un SP ausente sale aqui en una "
+                "lista, no como veinte tareas en rojo."),
+    )
+
+    inicio >> tarea_inventario >> tarea_preflight
 
     todas: list = []
 
@@ -118,7 +188,7 @@ with DAG(
             retries=0,
             execution_timeout=timedelta(minutes=1),
         )
-        tarea_inventario >> unica
+        tarea_inventario >> tarea_preflight >> unica
     else:
         grupo_anterior = None
         ordenes = sorted({p.orden for p in PROCESOS})
@@ -163,7 +233,7 @@ with DAG(
                     anterior_en_grupo = t
 
             if grupo_anterior is None:
-                tarea_inventario >> grupo
+                tarea_preflight >> grupo
             else:
                 grupo_anterior >> grupo
             grupo_anterior = grupo

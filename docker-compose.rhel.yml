@@ -372,10 +372,21 @@ services:
   spark-init:
     image: docker.io/library/busybox:1.36
     container_name: spark-init
-    command: sh -c "mkdir -p /data /events && chmod -R 777 /data /events && echo 'permisos ajustados'"
+    command: sh -c "mkdir -p /data/work /events /fix/parquet /fix/s2sql /fix/bt2sql && chmod -R 777 /data /events && chmod 777 /fix/parquet /fix/s2sql /fix/bt2sql && echo 'permisos ajustados'"
     volumes:
       - spark_data:/data
       - spark_events:/events
+      # Los bind mounts del parquet, para dejar su RAIZ escribible por los dos
+      # uid. Solo la raiz: las subcarpetas que se crean despues heredan el
+      # umask del que las crea, y de eso se encarga
+      # spark.hadoop.fs.permissions.umask-mode 000 en spark-defaults.conf.
+      #
+      # Esto estaba solo en docker-compose.windows.yml. En RHEL y Ubuntu
+      # spark-init se montaba sin ellos, asi que nunca tocaba los permisos de
+      # las carpetas de parquet: el arreglo existia y no se aplicaba.
+      - ${PARQUET_HOST_DIR:-./data/parquet}:/fix/parquet
+      - ${S2SQL_PARQUET_HOST_DIR:-./data/s2sql}:/fix/s2sql
+      - ${BT2SQL_PARQUET_HOST_DIR:-./data/bt2sql}:/fix/bt2sql
     networks:
       - airflow-network
     restart: "no"
@@ -505,6 +516,29 @@ services:
       - "${SPARK_WORKER_MEMORY:-2G}"
       - --webui-port
       - "8081"
+      # EL DIRECTORIO DE TRABAJO DEL WORKER, Y POR QUE HAY QUE DECIRSELO
+      #
+      # Por defecto el Worker usa $SPARK_HOME/work, o sea /opt/spark/work. En
+      # la imagen oficial /opt/spark pertenece a ROOT y el contenedor corre
+      # como uid 185, asi que el Worker no puede crear ahi la carpeta de cada
+      # executor (app-<id>/<executor>/, con su stdout, su stderr y los jars
+      # distribuidos).
+      #
+      # El fallo no se parece a su causa: el executor NO ARRANCA, el driver se
+      # queda en "Initial job has not accepted any resources" esperando, y el
+      # job cuelga hasta que lo mata el execution_timeout de la tarea. En el
+      # log del Worker si sale el "Permission denied", pero nadie mira ese log
+      # porque el que esta rojo es el de Airflow.
+      #
+      # Ademas, al no estar montado, ese directorio vivia en la capa escribible
+      # del contenedor: cada replica tenia el suyo, el host no veia ninguno, y
+      # se perdia al recrear.
+      #
+      # spark_data ya esta montado en todos los servicios de Spark en
+      # /opt/spark-data y spark-init ya lo deja en 777, asi que es el sitio
+      # natural para esto.
+      - --work-dir
+      - /opt/spark-data/work
     environment:
       SPARK_WORKER_OPTS: ${SPARK_WORKER_OPTS:-}
     volumes:

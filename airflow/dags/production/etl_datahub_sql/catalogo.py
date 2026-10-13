@@ -219,3 +219,38 @@ def inventario(variable: str) -> str:
     lineas.append("")
     lineas.append(f"  {activos} activo(s) de {total} declarado(s)")
     return "\n".join(lineas)
+
+
+def conexion_de(variable: str, por_defecto: str = "CONEXION_SQLSERVER") -> str:
+    """La Connection de Airflow que esta capa usa. Clave CONEXION del catalogo.
+
+    POR QUE CADA CAPA TIENE SU PROPIA CONEXION
+    ------------------------------------------
+    STG, ODS y BDS viven en bases de datos distintas. Una sola Connection
+    obligaria a que las tres estuvieran en la misma base, o a cruzar con nombres
+    de tres partes desde una base cualquiera -- y entonces el campo Schema de la
+    Connection no significaria nada y el pipeline dependeria de que el login
+    tenga permiso en todas.
+
+    Con una Connection por capa:
+      - el campo Schema de cada una apunta a SU base, y ahi es donde el
+        procedimiento se ejecuta por defecto;
+      - se le puede dar a cada login solo los permisos de su capa, que es lo
+        que un area de seguridad va a pedir;
+      - y mover una capa a otro servidor es cambiar una Connection, no el
+        codigo.
+
+    Si la clave no esta, se cae al nombre por defecto y se avisa: una
+    instalacion que no la declare sigue funcionando como antes, en una sola
+    base, en vez de romperse.
+    """
+    doc = leer_catalogo(variable)
+    valor = str(doc.get("CONEXION") or "").strip()
+    if valor:
+        return valor
+    logger.warning(
+        "%s no declara la clave CONEXION: se usa %s para toda la capa. "
+        "Para separar las capas en bases distintas, anada "
+        '"CONEXION": "<nombre>" en la raiz del catalogo.',
+        variable, por_defecto)
+    return por_defecto
