@@ -1,6 +1,6 @@
 # Documentación del DataHub
 
-Veintisiete documentos, ordenados por **cuándo los va a necesitar**, no por
+Los documentos del proyecto, ordenados por **cuándo los va a necesitar**, no por
 tema. Si busca algo concreto, empiece por la sección que describe el momento en
 que está.
 
@@ -35,9 +35,9 @@ no en producción.
 | [CREAR_UN_DAG.md](CREAR_UN_DAG.md) | Va a escribir un DAG nuevo |
 | [GUIA_CONEXIONES_DAGS.md](GUIA_CONEXIONES_DAGS.md) | No sabe cómo pedirle credenciales a Airflow sin escribirlas en el archivo |
 | [PLUGIN_SPARK.md](PLUGIN_SPARK.md) | Su DAG tiene que lanzar un job de Spark |
-- [CONFIG_RUNTIME_SPARK.md](CONFIG_RUNTIME_SPARK.md) - el pipeline Spark: la Variable BT2SQL_SPARK, las conexiones Generic y el control de publicacion del JSON puente. Lealo si cambio una Variable y el job siguio usando la anterior.
-- [VALIDAR_PIPELINE_SPARK.md](VALIDAR_PIPELINE_SPARK.md) - los comandos para validar el pipeline Spark en orden, de `compose config` a comparar contra el pipeline de pandas.
-- [CAPAS_ODS_BDS.md](CAPAS_ODS_BDS.md) - que pasa cuando una tabla de ODS o BDS falla: por que la capa ODS termina igual, como BDS continua solo con lo que paso, y por que la corrida acaba en rojo de todas formas.
+| [CONFIG_RUNTIME_SPARK.md](CONFIG_RUNTIME_SPARK.md) | Cambió una Variable y el job siguió usando la anterior |
+| [VALIDAR_PIPELINE_SPARK.md](VALIDAR_PIPELINE_SPARK.md) | Quiere validar el pipeline Spark en orden, de `compose config` hacia adelante |
+| [CAPAS_ODS_BDS.md](CAPAS_ODS_BDS.md) | Una tabla de ODS o BDS falló y necesita saber qué sigue corriendo y qué no |
 | [PIPELINE_BT2SQL.md](PIPELINE_BT2SQL.md) | Trabaja sobre Bantotal → Parquet → STG en SQL Server |
 | [ORIGEN_Y_DESTINO.md](ORIGEN_Y_DESTINO.md) | Necesita saber en qué seis sitios está declarado el origen y el destino, o va a cambiar uno de los dos |
 | [TABLAS_DE_CONTROL_Y_LOGS.md](TABLAS_DE_CONTROL_Y_LOGS.md) | Necesita saber qué tabla de control escribe cada proceso |
@@ -64,6 +64,7 @@ El `-204` de DB2 for i suele ser un desajuste entre `naming=sql` y
 | [GESTION_USUARIOS.md](GESTION_USUARIOS.md) | Hay que dar de alta a alguien |
 | [DISENO_ROLES.md](DISENO_ROLES.md) | Quiere entender qué puede hacer cada rol y por qué |
 | [ESCALAR_SPARK_WORKERS.md](ESCALAR_SPARK_WORKERS.md) | Los jobs se encolan y hace falta más capacidad |
+| [MEDIR_ESCALADO_SPARK.md](MEDIR_ESCALADO_SPARK.md) | Subió workers y el job tarda lo mismo, o va a medir si Spark escala |
 | [DIAGNOSTICO_SPARK.md](DIAGNOSTICO_SPARK.md) | Spark no levanta, un job muere con `No suitable driver`, o un DAG sale roto con un `ImportError` de algo que sí está en el archivo |
 | [COMANDOS_PODMAN_DOCKER.md](COMANDOS_PODMAN_DOCKER.md) | Está en un servidor con Podman y tiene los dedos acostumbrados a Docker |
 

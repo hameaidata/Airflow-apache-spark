@@ -2057,3 +2057,138 @@ def test_la_limpieza_falla_en_rojo_si_no_pudo_borrar():
     assert "umask-mode" in fuente, (
         "el mensaje de error no menciona el umask, que es la causa mas "
         "probable y la que costo una tarde encontrar")
+
+
+# ============================================================================
+# REPARTO POR CONTEO  (particion.modo = "cuantiles")
+# ----------------------------------------------------------------------------
+# El caso que lo motivo: 100 000 millones de filas y la PRIMERA particion se
+# traia 30 000 millones. Partir el rango en tramos iguales no parte los datos
+# en partes iguales cuando el volumen por fecha es desigual.
+# ============================================================================
+def _histograma_torcido():
+    """Volumen por mes muy desigual, como el de un core bancario.
+
+    2019 concentra la carga inicial (migracion) y el resto baja. Total
+    100 000 millones, con 30 000 millones en el primer mes.
+    """
+    h = [(201901, 30_000_000_000)]
+    h += [(201900 + m, 1_000_000_000) for m in range(2, 13)]       # 11 000 M
+    h += [(202000 + m, 2_000_000_000) for m in range(1, 13)]       # 24 000 M
+    h += [(202100 + m, 2_000_000_000) for m in range(1, 13)]       # 24 000 M
+    h += [(202200 + m, 916_666_667) for m in range(1, 13)]         # ~11 000 M
+    return h
+
+
+def test_cortes_por_conteo_reparte_por_filas_no_por_rango(extraccion):
+    """Los cortes deben caer donde esta el peso, no a intervalos iguales."""
+    h = _histograma_torcido()
+    cortes = extraccion.cortes_por_conteo(h, 4)
+
+    assert len(cortes) == 3, "con 4 particiones hacen falta 3 cortes"
+    # El primer corte tiene que caer MUY pronto, porque el primer mes ya
+    # supera el objetivo por particion. Un reparto por rango lo pondria
+    # cerca de 2020.
+    assert cortes[0] <= 201902, (
+        f"el primer corte cayo en {cortes[0]}: el reparto por conteo tiene "
+        f"que cerrar la primera particion en cuanto se pasa del objetivo")
+    assert cortes == sorted(cortes), "los cortes salen desordenados"
+    assert len(set(cortes)) == len(cortes), "hay cortes repetidos"
+
+
+def test_cortes_por_conteo_nunca_deja_particiones_vacias(extraccion):
+    """Un bucket gigante al principio no debe comerse los cortes.
+
+    Sin la reserva de buckets, el acumulado cruza varios objetivos dentro del
+    primer bucket y se emiten cortes seguidos, dejando particiones vacias al
+    final.
+    """
+    h = [(1, 10_000_000)] + [(i, 10) for i in range(2, 9)]
+    cortes = extraccion.cortes_por_conteo(h, 4)
+    assert len(cortes) == 3
+    assert len(set(cortes)) == 3, "cortes repetidos = particiones vacias"
+    # Debe quedar al menos un bucket por encima del ultimo corte.
+    assert cortes[-1] < h[-1][0]
+
+
+def test_cortes_por_conteo_casos_degenerados(extraccion):
+    assert extraccion.cortes_por_conteo([], 4) == []
+    assert extraccion.cortes_por_conteo([(1, 5)], 4) == []
+    assert extraccion.cortes_por_conteo([(1, 5), (2, 5)], 1) == []
+    # Mas particiones que buckets: se reduce, no se inventa.
+    cortes = extraccion.cortes_por_conteo([(1, 5), (2, 5)], 10)
+    assert len(cortes) <= 1
+
+
+def test_los_predicados_cubren_todo_el_dominio_incluidos_los_NULL(extraccion):
+    """El agujero que de verdad pierde datos.
+
+    En modo "rango" Spark agrega el solo un 'OR col IS NULL' a la primera
+    particion. Con 'predicates' NO agrega nada: una fila con la columna en
+    NULL no cumple ningun predicado y desaparece sin que nada falle.
+    """
+    pred = extraccion.predicados_de_cortes("PGFCIE", "PGFCIE", [100, 200])
+
+    assert any("IS NULL" in p for p in pred), (
+        "falta la particion de los NULL: con predicates Spark no la agrega, "
+        "y esas filas se pierden EN SILENCIO")
+    assert len(pred) == 4, "3 tramos + la de NULL"
+    assert pred[0] == "PGFCIE <= 100"
+    assert pred[1] == "PGFCIE > 100 AND PGFCIE <= 200"
+    assert pred[2] == "PGFCIE > 200"
+
+
+def test_los_predicados_no_se_solapan_ni_dejan_huecos(extraccion):
+    """Cada fila tiene que caer en exactamente UNA particion.
+
+    Un solapamiento duplica filas; un hueco las pierde. Las dos cosas pasan
+    calladas, asi que se comprueban con valores concretos.
+    """
+    cortes = [10, 20, 30]
+    pred = extraccion.predicados_de_cortes("C", "C", cortes, con_nulos=False)
+
+    def cumple(p, v):
+        # Traduce el WHERE generado a una comparacion en Python.
+        partes = [t.strip() for t in p.split("AND")]
+        for t in partes:
+            op, lim = t.replace("C", "", 1).strip().split(" ", 1)
+            lim = int(lim)
+            if op == "<=" and not v <= lim:
+                return False
+            if op == ">" and not v > lim:
+                return False
+        return True
+
+    for v in (-5, 0, 10, 11, 20, 21, 30, 31, 999):
+        encajan = [i for i, p in enumerate(pred) if cumple(p, v)]
+        assert len(encajan) == 1, (
+            f"el valor {v} encaja en {len(encajan)} particiones ({encajan}): "
+            f"0 pierde filas, 2 las duplica")
+
+
+def test_predicados_con_un_solo_valor_dominante_se_avisa(extraccion, caplog):
+    """Cuando un unico valor concentra el peso, no hay corte que lo salve.
+
+    Es el limite real del metodo y hay que decirlo ANTES de leer: Spark no
+    parte dentro de un valor.
+    """
+    h = [(201901, 30_000_000_000)] + [(201900 + m, 100) for m in range(2, 13)]
+    cortes = extraccion.cortes_por_conteo(h, 4)
+    with caplog.at_level(logging.WARNING):
+        extraccion.avisar_del_reparto(h, cortes, "FSH005", "PGFCIE")
+    texto = caplog.text
+    assert "concentra" in texto and "NINGUN corte" in texto, (
+        "sin este aviso el usuario cambia de modo, ve el mismo tiempo, y no "
+        "tiene forma de saber que el problema es la columna")
+
+
+def test_el_bucket_rechaza_sql_inyectado(extraccion):
+    """'bucket' es SQL cruda que viene de una Variable de Airflow."""
+    for malo in ("PGFCIE; DROP TABLE X", "PGFCIE'", "PGFCIE -- x",
+                 'PGFCIE"', "PGFCIE/*x*/"):
+        assert not extraccion.EXPRESION_BUCKET.match(malo), (
+            f"{malo!r} deberia rechazarse")
+    for bueno in ("PGFCIE", "PGFCIE / 100", "YEAR(F_ALTA)",
+                  "MOD(NUM_CUENTA, 16)"):
+        assert extraccion.EXPRESION_BUCKET.match(bueno), (
+            f"{bueno!r} deberia aceptarse")

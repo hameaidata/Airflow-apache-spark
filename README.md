@@ -291,6 +291,7 @@ Los DAGs se recargan solos. El `.env`, el compose y los plugins requieren
 | Archivo | Contenido |
 |---|---|
 | `docs/ESCALAR_SPARK_WORKERS.md` | Añadir capacidad, y por qué a veces no acelera |
+| `docs/MEDIR_ESCALADO_SPARK.md` | Medir si escala: los cinco topes y la aritmética de memoria |
 | `docs/DIAGNOSTICO_SPARK.md` | Qué hacer si Spark no levanta |
 | `docs/ESTADO_DEL_PROYECTO.md` | Qué está verificado y qué no |
 

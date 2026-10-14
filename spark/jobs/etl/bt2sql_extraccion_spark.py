@@ -46,6 +46,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import date, datetime, timedelta
 
 from pyspark.sql import SparkSession
@@ -57,6 +58,16 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("bt2sql_extraccion_spark")
 
 IDENTIFICADOR = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# 'bucket' es una expresion SQL del catalogo, no un identificador: hay que
+# permitir parentesis y aritmetica ("PGFCIE / 100", "YEAR(F_ALTA)") pero cerrar
+# la puerta a comillas, punto y coma y comentarios, que es por donde se cuela
+# una inyeccion desde una Variable de Airflow.
+# El lookahead no es decorativo: "-" y "/" tienen que estar permitidos
+# (fechas, division) y eso deja pasar "--", "/*" y "*/", con los que se
+# comenta el resto de la consulta. Lo encontro un test, no una revision.
+EXPRESION_BUCKET = re.compile(
+    r"^(?!.*(--|/\*|\*/))[A-Za-z0-9_()\s/*+.,:-]{1,120}$")
 
 
 # ============================================================================
@@ -414,6 +425,167 @@ def construir_select(fila: dict, fecha_proceso=None,
     return sql
 
 
+# ============================================================================
+# REPARTO POR CONTEO  (particion.modo = "cuantiles")
+# ----------------------------------------------------------------------------
+# El modo "rango" de Spark (partitionColumn/lowerBound/upperBound) parte el
+# RANGO en tramos iguales, no los DATOS. Con una columna de fecha y volumen
+# desigual por periodo, eso da una particion monstruosa y el resto vacias: los
+# limites buenos para un bloque de fechas son malos para otro, y un JSON
+# estatico no puede seguir al dato.
+#
+# Estas tres funciones cortan por CONTEO. Primero un histograma barato contra
+# el origen (COUNT(*) agrupado por la columna), despues un empaquetado de
+# buckets contiguos en N grupos de peso parecido, y de ahi los predicados.
+#
+# Lo que NO puede arreglar: si un solo valor de la columna concentra mas que
+# el objetivo por particion, no hay corte posible que lo equilibre, porque
+# Spark no parte dentro de un valor. En ese caso hace falta otra columna, o
+# una clave sintetica uniforme. 'avisar_del_reparto' lo detecta y lo dice
+# ANTES de leer, que es la unica forma de no descubrirlo tras cuatro horas.
+# ============================================================================
+def histograma_de(spark, url: str, clase: str, usuario: str, clave: str,
+                  select: str, bucket: str, tabla: str) -> list[tuple]:
+    """COUNT(*) por bucket contra el origen, respetando el FILTRO."""
+    sql = (f"SELECT {bucket} AS B, COUNT(*) AS N FROM ({select}) AS q "
+           f"GROUP BY {bucket} ORDER BY 1")
+    t0 = time.time()
+    conexion = abrir_jdbc(spark, url, usuario, clave, clase)
+    try:
+        filas = filas_de(conexion, sql)
+    finally:
+        conexion.close()
+    logger.info("[%s] histograma: %s bucket(s) en %.1fs",
+                tabla, len(filas), time.time() - t0)
+    salida = []
+    for f in filas:
+        valor, n = f.get("B"), f.get("N")
+        if valor is None:
+            continue                      # los NULL van a su propia particion
+        salida.append((valor, int(n or 0)))
+    return salida
+
+
+def cortes_por_conteo(histograma: list[tuple], n: int) -> list:
+    """Devuelve hasta n-1 cortes que dejan grupos de peso parecido.
+
+    Empaquetado codicioso sobre buckets contiguos: se corta cuando el
+    acumulado cruza el objetivo, reservando siempre buckets suficientes para
+    los grupos que faltan (sin eso, un bucket enorme al principio se come los
+    cortes y salen particiones vacias al final).
+    """
+    total = sum(f for _, f in histograma)
+    if total <= 0 or n <= 1 or len(histograma) < 2:
+        return []
+    n = min(int(n), len(histograma))
+    objetivo = total / n
+    cortes: list = []
+    acumulado = 0
+    for i, (valor, filas) in enumerate(histograma):
+        acumulado += filas
+        faltan = n - 1 - len(cortes)
+        quedan = len(histograma) - i - 1
+        if faltan > 0 and acumulado >= objetivo * (len(cortes) + 1) and quedan >= faltan:
+            cortes.append(valor)
+    return cortes
+
+
+def predicados_de_cortes(bucket: str, columna: str, cortes: list,
+                         con_nulos: bool = True) -> list[str]:
+    """Los WHERE, uno por particion.
+
+    OJO CON LOS NULL
+    ----------------
+    A diferencia del modo "rango" --donde Spark mete los NULL en la primera
+    particion con un 'OR col IS NULL' que agrega el solo--, con 'predicates'
+    Spark NO agrega nada: una fila cuyo bucket es NULL no cumple ningun
+    predicado y se PIERDE EN SILENCIO. De ahi la particion extra.
+    """
+    def lit(v):
+        return str(v) if isinstance(v, (int, float)) else f"'{v}'"
+
+    if not cortes:
+        pred = ["1 = 1"]
+    else:
+        pred = [f"{bucket} <= {lit(cortes[0])}"]
+        for a, b in zip(cortes, cortes[1:]):
+            pred.append(f"{bucket} > {lit(a)} AND {bucket} <= {lit(b)}")
+        pred.append(f"{bucket} > {lit(cortes[-1])}")
+    if con_nulos:
+        pred.append(f"{columna} IS NULL")
+    return pred
+
+
+def avisar_del_reparto(histograma: list[tuple], cortes: list,
+                       tabla: str, columna: str) -> None:
+    """Estima el peso de cada particion y avisa si sigue torcido."""
+    if not histograma:
+        return
+    total = sum(f for _, f in histograma)
+    grupos, acumulado, i = [], 0, 0
+    for valor, filas in histograma:
+        if i < len(cortes) and valor > cortes[i]:
+            grupos.append(acumulado)
+            acumulado = 0
+            i += 1
+        acumulado += filas
+    grupos.append(acumulado)
+
+    logger.info("[%s] reparto estimado por particion: %s",
+                tabla, ", ".join(f"{g:,}" for g in grupos))
+
+    mayor = max(grupos) if grupos else 0
+    if total and mayor / total > 1.5 / max(len(grupos), 1):
+        logger.warning(
+            "[%s] la particion mas grande se lleva el %.0f%% de %s filas "
+            "(lo parejo seria el %.0f%%). El reparto sigue torcido.",
+            tabla, 100 * mayor / total, f"{total:,}", 100 / len(grupos))
+
+    peor = max(histograma, key=lambda x: x[1])
+    if total and peor[1] / total > 1.0 / max(len(grupos), 1):
+        logger.warning(
+            "[%s] el valor %s de %s concentra %s filas (%.0f%% del total): "
+            "NINGUN corte por esta columna puede equilibrarlo, porque Spark no "
+            "parte dentro de un valor. Use otra columna, un bucket mas fino, o "
+            "una clave sintetica uniforme (RRN() en DB2 for i).",
+            tabla, peor[0], columna, f"{peor[1]:,}", 100 * peor[1] / total)
+
+
+def resolver_predicados(spark, url: str, clase: str, usuario: str, clave: str,
+                        select: str, particion: dict, tabla: str) -> list[str]:
+    """Los predicados de 'cuantiles' o 'predicados', ya validados."""
+    modo = str(particion.get("modo") or "rango").strip().lower()
+
+    if modo == "predicados":
+        pred = [str(x) for x in (particion.get("predicados") or []) if str(x).strip()]
+        if not pred:
+            raise SystemExit(f"[{tabla}] particion.modo='predicados' sin lista "
+                             f"'predicados'.")
+        logger.info("[%s] %s predicado(s) fijos del catalogo", tabla, len(pred))
+        return pred
+
+    columna = validar(particion["columna"], "particion.columna")
+    bucket = str(particion.get("bucket") or columna).strip()
+    if not EXPRESION_BUCKET.match(bucket):
+        raise SystemExit(f"[{tabla}] particion.bucket no es una expresion "
+                         f"aceptada: {bucket!r}")
+    n = int(particion.get("particiones") or 4)
+
+    histograma = histograma_de(spark, url, clase, usuario, clave,
+                               select, bucket, tabla)
+    if not histograma:
+        logger.warning("[%s] el histograma salio vacio: se lee sin particionar.",
+                       tabla)
+        return []
+    cortes = cortes_por_conteo(histograma, n)
+    avisar_del_reparto(histograma, cortes, tabla, columna)
+    pred = predicados_de_cortes(bucket, columna, cortes,
+                                bool(particion.get("nulos", True)))
+    for i, p in enumerate(pred):
+        logger.info("[%s]   particion %s : WHERE %s", tabla, i, p)
+    return pred
+
+
 def leer_origen(spark, url: str, clase: str, usuario: str, clave: str,
                 fila: dict, particion: dict | None, fetchsize: int,
                 fecha_proceso=None, batch_id: str | None = None):
@@ -442,6 +614,22 @@ def leer_origen(spark, url: str, clase: str, usuario: str, clave: str,
               .option("password", clave)
               .option("dbtable", consulta)
               .option("fetchsize", int(fetchsize)))
+
+    modo = str((particion or {}).get("modo") or "rango").strip().lower()
+
+    # Los modos por predicados no pasan por .option(): la lista de WHERE solo
+    # se puede dar por spark.read.jdbc(predicates=...), que es otra API.
+    if particion and modo in ("cuantiles", "predicados"):
+        pred = resolver_predicados(spark, url, clase, usuario, clave,
+                                   select, particion, tabla)
+        props = {"user": usuario or "", "password": clave or "",
+                 "driver": clase, "fetchsize": str(int(fetchsize))}
+        if pred:
+            logger.info("[%s] lectura en %s particiones por conteo (modo=%s)",
+                        tabla, len(pred), modo)
+            return spark.read.jdbc(url=url, table=consulta,
+                                   predicates=pred, properties=props)
+        return spark.read.jdbc(url=url, table=consulta, properties=props)
 
     if particion:
         col = validar(particion["columna"], "particion.columna")
